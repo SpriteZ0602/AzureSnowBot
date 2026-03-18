@@ -1,0 +1,12 @@
+[project]
+name = "AzureSnowBot"
+version = "0.1.0"
+description = "AzureSnow QQ Bot powered by NoneBot2 + NapCat"
+requires-python = ">=3.10"
+
+[tool.nonebot]
+adapters = [
+    { name = "OneBot V11", module_name = "nonebot.adapters.onebot.v11" }
+]
+plugins = []
+plugin_dirs = ["plugins"]
