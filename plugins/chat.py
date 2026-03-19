@@ -1,10 +1,13 @@
+import json
+from pathlib import Path
+
 import httpx
-from nonebot import on_message, get_driver
+from nonebot import on_message, on_fullmatch, get_driver
 from nonebot.adapters.onebot.v11 import PrivateMessageEvent
 from nonebot.exception import FinishedException
 from nonebot.log import logger
 
-# 从 .env 读取配置
+# ──────────────────── 配置 ────────────────────
 config = get_driver().config
 OPENAI_API_KEY: str = getattr(config, "openai_api_key", "")
 OPENAI_BASE_URL: str = getattr(config, "openai_base_url", "https://api.openai.com/v1")
@@ -12,6 +15,93 @@ OPENAI_MODEL: str = getattr(config, "openai_model", "gpt-5.4")
 
 SYSTEM_PROMPT = "你是一个有用的助手。请用简洁的中文回答用户的问题。"
 
+# 256K 上下文窗口，预留 20% 安全缓冲 + 4096 给回复
+MAX_CONTEXT_TOKENS = 256_000
+SAFETY_MARGIN = 0.8
+REPLY_RESERVE = 4096
+MAX_HISTORY_TOKENS = int(MAX_CONTEXT_TOKENS * SAFETY_MARGIN) - REPLY_RESERVE
+
+# 会话文件目录
+SESSION_DIR = Path("data/sessions")
+SESSION_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ──────────────────── Token 估算 ────────────────────
+def estimate_tokens(text: str) -> int:
+    """中文约 1 字 ≈ 1.5 token，英文/数字约 4 字符 ≈ 1 token"""
+    cn_chars = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
+    other_chars = len(text) - cn_chars
+    return int(cn_chars * 1.5 + other_chars / 4)
+
+
+def estimate_message_tokens(msg: dict) -> int:
+    """估算单条 message 的 token 数（含 role 开销约 4 token）"""
+    return estimate_tokens(msg.get("content", "")) + 4
+
+
+# ──────────────────── JSONL 会话持久化 ────────────────────
+def _session_path(user_id: str) -> Path:
+    return SESSION_DIR / f"{user_id}.jsonl"
+
+
+def load_history(user_id: str) -> list[dict]:
+    """从 JSONL 文件加载对话历史"""
+    path = _session_path(user_id)
+    if not path.exists():
+        return []
+    messages = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            try:
+                messages.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return messages
+
+
+def append_message(user_id: str, message: dict) -> None:
+    """追加一条消息到 JSONL 文件"""
+    path = _session_path(user_id)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(message, ensure_ascii=False) + "\n")
+
+
+def clear_history(user_id: str) -> None:
+    """清除用户的对话历史"""
+    path = _session_path(user_id)
+    if path.exists():
+        path.unlink()
+
+
+# ──────────────────── 历史截断 ────────────────────
+def trim_history(messages: list[dict]) -> list[dict]:
+    """从最新消息向前保留，直到累计 token 接近上限"""
+    system_tokens = estimate_message_tokens({"role": "system", "content": SYSTEM_PROMPT})
+    budget = MAX_HISTORY_TOKENS - system_tokens
+    trimmed: list[dict] = []
+    total = 0
+    for msg in reversed(messages):
+        cost = estimate_message_tokens(msg)
+        if total + cost > budget:
+            break
+        trimmed.append(msg)
+        total += cost
+    trimmed.reverse()
+    return trimmed
+
+
+# ──────────────────── 清除对话指令 ────────────────────
+reset = on_fullmatch("清除对话", priority=10, block=True)
+
+
+@reset.handle()
+async def handle_reset(event: PrivateMessageEvent):
+    clear_history(str(event.user_id))
+    await reset.finish("✅ 对话历史已清除。")
+
+
+# ──────────────────── 主对话处理 ────────────────────
 chat = on_message(priority=99, block=False)
 
 
@@ -24,17 +114,26 @@ async def handle_chat(event: PrivateMessageEvent):
     if not OPENAI_API_KEY:
         await chat.finish("⚠️ 未配置 OpenAI API Key，请联系管理员。")
 
+    user_id = str(event.user_id)
+
+    # 记录用户消息
+    user_msg = {"role": "user", "content": user_input}
+    append_message(user_id, user_msg)
+
+    # 加载历史并截断
+    history = load_history(user_id)
+    trimmed = trim_history(history)
+
+    # 组装 messages
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + trimmed
+
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json",
     }
-
     payload = {
         "model": OPENAI_MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_input},
-        ],
+        "messages": messages,
     }
 
     try:
@@ -47,6 +146,10 @@ async def handle_chat(event: PrivateMessageEvent):
             resp.raise_for_status()
             data = resp.json()
             reply = data["choices"][0]["message"]["content"].strip()
+
+            # 记录助手回复
+            append_message(user_id, {"role": "assistant", "content": reply})
+
             await chat.finish(reply)
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
