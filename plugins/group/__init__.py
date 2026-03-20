@@ -6,14 +6,16 @@
 
 from nonebot import get_driver
 from ..mcp import manager as mcp
+from ..skill import manager as skill
 
-# MCP 生命周期
+# MCP + Skill 生命周期
 driver = get_driver()
 
 
 @driver.on_startup
 async def _startup():
-    await mcp.initialize()
+    skill.scan_skills()     # Skill 系统（同步，纯文件扫描）
+    await mcp.initialize()  # MCP 服务器（异步，需要连接）
 
 
 @driver.on_shutdown

@@ -17,6 +17,11 @@ from ..persona.manager import (
     load_history, append_message,
 )
 from ..mcp.manager import get_openai_tools, call_tool, MAX_TOOL_ROUNDS
+from ..skill.manager import (
+    build_catalog_prompt as skill_catalog_prompt,
+    get_openai_tools as skill_openai_tools,
+    handle_tool_call as skill_handle_tool_call,
+)
 from .utils import (
     OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL,
     in_whitelist, is_at_bot, extract_text,
@@ -58,6 +63,11 @@ async def handle_group_chat(event: GroupMessageEvent):
         logger.warning(f"群 {group_id} 人格 {active_persona} 的 prompt 文件不存在，跳过响应")
         return
 
+    # 注入 Skill 目录（Level 1 渐进式披露）
+    skill_catalog = skill_catalog_prompt()
+    if skill_catalog:
+        system_prompt += "\n" + skill_catalog
+
     # 组装用户消息（带发送者标识 + 引用内容）
     if quoted_text:
         content = f"[{sender}] (引用了一条消息: \"{quoted_text}\"): {user_input}"
@@ -81,8 +91,8 @@ async def handle_group_chat(event: GroupMessageEvent):
         "messages": messages,
     }
 
-    # 如果有 MCP 工具，加入 tools 参数
-    openai_tools = get_openai_tools()
+    # 合并 MCP 工具 + Skill 工具
+    openai_tools = get_openai_tools() + skill_openai_tools()
     if openai_tools:
         payload["tools"] = openai_tools
 
@@ -121,7 +131,13 @@ async def handle_group_chat(event: GroupMessageEvent):
                     except json.JSONDecodeError:
                         fn_args = {}
 
-                    tool_result = await call_tool(fn_name, fn_args)
+                    # 优先尝试 Skill 本地工具，再走 MCP
+                    skill_result = skill_handle_tool_call(fn_name, fn_args)
+                    if skill_result is not None:
+                        tool_result = skill_result
+                    else:
+                        tool_result = await call_tool(fn_name, fn_args)
+
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],

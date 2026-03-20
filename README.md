@@ -1,6 +1,6 @@
 # AzureSnowBot
 
-基于 NapCat + NoneBot2 的 QQ 智能 Agent Bot。支持多轮对话、人格切换、MCP 工具调用。
+基于 NapCat + NoneBot2 的 QQ 智能 Agent Bot。支持多轮对话、人格切换、MCP 工具调用、渐进式披露 Skill 系统。
 
 ## 功能
 
@@ -16,6 +16,9 @@
 | @Bot `/persona create <名称> <prompt>` | 创建本群私有人格 |
 | @Bot `/persona delete <名称>` | 删除本群私有人格 |
 | @Bot `/reset` | 清除当前对话历史 |
+| @Bot `/skill` | 列出所有已加载技能 |
+| @Bot `/skill <名称>` | 查看技能详情 |
+| @Bot `/skill reload` | 重新扫描技能目录 |
 | @Bot `/help` | 显示帮助信息 |
 
 ### 私聊
@@ -54,6 +57,27 @@
 }
 ```
 
+### Skill 技能系统（渐进式披露）
+
+借鉴 [OpenClaw AgentSkills](https://github.com/nicepkg/openclaw) 的设计理念，三层加载体系，最大限度节省上下文窗口：
+
+| 层级 | 内容 | 加载时机 | Token 开销 |
+|------|------|----------|------------|
+| Level 1 | 技能名称 + 描述 | 始终在 system prompt 中 | ~100 词/技能 |
+| Level 2 | SKILL.md 正文 | LLM 调用 `load_skill` 工具时 | 按需加载 |
+| Level 3 | references/ 参考文档 | LLM 调用 `load_reference` 工具时 | 按需加载 |
+
+Skill 目录结构：
+
+```
+data/skills/<skill-name>/
+├── SKILL.md              (必需) YAML frontmatter + Markdown 正文
+└── references/           (可选) 详细参考文档
+    └── example.md
+```
+
+内置技能：`web-search`、`translator`、`code-reviewer`
+
 ## 技术栈
 
 - **NapCat** — 基于 NTQQ 的无头 Bot 框架，提供 OneBot 11 协议支持
@@ -79,10 +103,17 @@ AzureSnowBot/
 │   ├── persona/                   #   人格管理
 │   │   ├── manager.py             #     人格增删查改 + 会话持久化
 │   │   └── commands.py            #     /persona 指令
+│   ├── skill/                     #   Skill 技能系统
+│   │   ├── manager.py             #     技能扫描、解析、渐进式加载
+│   │   └── commands.py            #     /skill 指令
 │   └── mcp/                       #   MCP 工具集成
 │       └── manager.py             #     MCP 服务器连接 + 工具调用
 ├── data/
 │   ├── mcp_servers.json           # MCP 服务器配置
+│   ├── skills/                    # Skill 技能目录
+│   │   ├── web-search/            #   网络搜索技能
+│   │   ├── translator/            #   翻译技能
+│   │   └── code-reviewer/         #   代码审查技能 (+ references/)
 │   ├── personas/                  # 通用人格 prompt 文件
 │   │   ├── default.txt
 │   │   ├── catgirl.txt
@@ -173,6 +204,37 @@ python main.py
 
 也可以在群聊中通过 `/persona create <名称> <prompt>` 创建仅限该群的私有人格。
 
+### 创建技能 (Skill)
+
+在 `data/skills/` 下创建目录，写一个 `SKILL.md`：
+
+```
+data/skills/my-skill/
+├── SKILL.md
+└── references/       (可选)
+    └── details.md
+```
+
+`SKILL.md` 格式：
+
+```markdown
+---
+name: my-skill
+description: 这个技能做什么。当用户问到 XX 时使用。
+---
+
+# My Skill
+
+具体的工作流程和指导...
+```
+
+**渐进式披露设计原则：**
+
+- `name` + `description`（frontmatter）始终注入上下文，让 LLM 知道有哪些技能
+- Markdown 正文只在 LLM 触发时加载，节省 token
+- references/ 中的文件按需加载，适合放详细参考料
+- SKILL.md 正文建议不超过 500 行，超出部分拆到 references/
+
 ## Roadmap
 
 - [x] NapCat + NoneBot2 基础通信
@@ -182,5 +244,6 @@ python main.py
 - [x] 人格系统（通用 + 群私有，双层体系）
 - [x] MCP 工具调用（Agentic Loop）
 - [x] Playwright 浏览器工具（无头模式）
+- [x] Skill 技能系统（渐进式披露）
 - [ ] 本地自定义工具注册
 - [ ] 图片理解 / 多模态
