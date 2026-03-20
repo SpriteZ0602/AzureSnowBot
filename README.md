@@ -1,37 +1,102 @@
 # AzureSnowBot
 
-基于 NapCat + NoneBot2 的 QQ 智能 Agent Bot。
+基于 NapCat + NoneBot2 的 QQ 智能 Agent Bot。支持多轮对话、人格切换、MCP 工具调用。
 
-## 项目状态
+## 功能
 
-🚧 **开发中** — 已接入 LLM 实现多轮对话，后续将扩展 Agent 能力。
+### 群聊（需要 @Bot）
+
+| 指令 | 说明 |
+|------|------|
+| @Bot `任意消息` | 调用 LLM 进行多轮对话（支持引用消息） |
+| @Bot `/persona` | 列出所有可用人格 |
+| @Bot `/persona <名称>` | 切换到指定人格 |
+| @Bot `/persona info` | 查看当前人格的 prompt 摘要 |
+| @Bot `/persona reset` | 清除当前人格的对话历史 |
+| @Bot `/persona create <名称> <prompt>` | 创建本群私有人格 |
+| @Bot `/persona delete <名称>` | 删除本群私有人格 |
+| @Bot `/reset` | 清除当前对话历史 |
+| @Bot `/help` | 显示帮助信息 |
+
+### 私聊
+
+| 指令 | 说明 |
+|------|------|
+| 任意消息 | 调用 LLM 进行多轮对话 |
+| `/reset` | 清空当前用户的对话历史 |
+| `ping` | 回复 `pong~`，检测 Bot 是否在线 |
+
+### 人格系统
+
+双层人格体系，每个人格有独立的 system prompt 和对话历史：
+
+- **通用人格**：`data/personas/<name>.txt`，所有群共享
+- **群私有人格**：`data/sessions/groups/<gid>/personas/<name>.txt`，仅该群可见
+
+查找优先级：群私有 > 通用（同名时群的覆盖通用）
+
+内置人格：`default`、`catgirl`、`philosopher`、`roaster`
+
+### MCP 工具调用
+
+集成 [Model Context Protocol](https://modelcontextprotocol.io) 客户端，LLM 可在对话中自动调用外部工具（Agentic Loop，最多 10 轮）。
+
+工具通过 `data/mcp_servers.json` 配置，支持任意 MCP 服务器：
+
+```json
+{
+  "servers": {
+    "playwright": {
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@playwright/mcp", "--headless"]
+    }
+  }
+}
+```
 
 ## 技术栈
 
 - **NapCat** — 基于 NTQQ 的无头 Bot 框架，提供 OneBot 11 协议支持
 - **NoneBot2** — Python 异步 Bot 框架，负责消息处理与插件管理
-- **ChatGPT** — 大模型对话能力，支持多轮上下文
-
-## 功能
-
-| 指令 | 说明 |
-|------|------|
-| `ping` | 回复 `pong~`，用于检测 Bot 是否在线 |
-| 私聊任意消息 | 调用 ChatGPT 进行多轮对话 |
-| `清除对话` | 清空当前用户的对话历史 |
+- **OpenAI-compatible API** — 大模型对话（默认模型 gpt-5.4，可配置）
+- **MCP SDK** — Model Context Protocol 客户端，连接外部工具服务器
 
 ## 项目结构
 
 ```
 AzureSnowBot/
-├── main.py               # Bot 入口
-├── pyproject.toml         # 项目配置
-├── .env                   # 运行时环境变量（API Key 等，不提交）
-├── plugins/               # NoneBot2 插件目录
-│   ├── ping.py            # 存活检测插件
-│   └── chat.py            # ChatGPT 多轮对话插件
-└── data/
-    └── sessions/          # 对话历史（JSONL，按用户存储）
+├── main.py                        # Bot 入口
+├── pyproject.toml                 # 项目配置
+├── .env                           # 运行时环境变量（不提交）
+├── plugins/                       # NoneBot2 插件目录
+│   ├── ping.py                    #   存活检测
+│   ├── chat/                      #   私聊对话
+│   │   └── handler.py
+│   ├── group/                     #   群聊对话
+│   │   ├── handler.py             #     消息处理 + Agentic Loop
+│   │   ├── commands.py            #     /reset, /help
+│   │   └── utils.py               #     白名单、工具函数
+│   ├── persona/                   #   人格管理
+│   │   ├── manager.py             #     人格增删查改 + 会话持久化
+│   │   └── commands.py            #     /persona 指令
+│   └── mcp/                       #   MCP 工具集成
+│       └── manager.py             #     MCP 服务器连接 + 工具调用
+├── data/
+│   ├── mcp_servers.json           # MCP 服务器配置
+│   ├── personas/                  # 通用人格 prompt 文件
+│   │   ├── default.txt
+│   │   ├── catgirl.txt
+│   │   ├── philosopher.txt
+│   │   └── roaster.txt
+│   └── sessions/                  # 对话历史（JSONL）
+│       ├── <user_id>.jsonl        #   私聊会话
+│       └── groups/
+│           └── <group_id>/
+│               ├── _active.json   #   当前激活人格
+│               ├── <persona>.jsonl #  对话历史（按人格隔离）
+│               └── personas/      #   群私有人格
+└── vendor/
+    └── NapCat.Shell/              # NapCat 运行时
 ```
 
 ## 快速开始
@@ -40,11 +105,19 @@ AzureSnowBot/
 
 - Python >= 3.10
 - NapCat Shell 已安装并登录 QQ
+- Node.js（如需 MCP 工具，如 Playwright）
 
 ### 安装依赖
 
 ```bash
-pip install "nonebot2[fastapi]" nonebot-adapter-onebot httpx
+pip install "nonebot2[fastapi]" nonebot-adapter-onebot httpx mcp
+```
+
+如需 Playwright MCP 服务器：
+
+```bash
+npm install -g @playwright/mcp playwright
+npx playwright install chromium
 ```
 
 ### 配置
@@ -55,10 +128,17 @@ pip install "nonebot2[fastapi]" nonebot-adapter-onebot httpx
 HOST=127.0.0.1
 PORT=8082
 OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
-# 可选
-# OPENAI_BASE_URL=https://api.openai.com/v1
-# OPENAI_MODEL=gpt-5.4
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-5.4
+GROUP_WHITELIST=["群号1", "群号2"]
 ```
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `OPENAI_API_KEY` | OpenAI 兼容 API 密钥 | （必填） |
+| `OPENAI_BASE_URL` | API 基地址 | `https://api.openai.com/v1` |
+| `OPENAI_MODEL` | 模型名称 | `gpt-5.4` |
+| `GROUP_WHITELIST` | 允许使用的群号列表（JSON 数组） | `[]`（空 = 不响应任何群） |
 
 2. 在 NapCat WebUI 中添加 **WebSocket 客户端**，地址设为：
 
@@ -66,17 +146,41 @@ OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
 ws://localhost:8082/onebot/v11/ws
 ```
 
+3.（可选）配置 MCP 服务器，编辑 `data/mcp_servers.json`：
+
+```json
+{
+  "servers": {
+    "playwright": {
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@playwright/mcp", "--headless"]
+    }
+  }
+}
+```
+
+> Windows 上 MCP manager 会自动补全 Node.js 到子进程 PATH，无需额外配置。
+
 ### 启动
 
 ```bash
 python main.py
 ```
 
+### 添加人格
+
+在 `data/personas/` 下创建 `<名称>.txt` 文件，内容为 system prompt，即可全局使用。
+
+也可以在群聊中通过 `/persona create <名称> <prompt>` 创建仅限该群的私有人格。
+
 ## Roadmap
 
 - [x] NapCat + NoneBot2 基础通信
-- [x] 接入 LLM，实现智能对话
+- [x] 接入 LLM，实现多轮对话（私聊 + 群聊）
 - [x] 多轮对话上下文管理（JSONL 持久化 + Token 截断）
-- [ ] 群聊对话支持
-- [ ] 自定义 System Prompt
-- [ ] 工具调用 / Agent 能力
+- [x] 群聊白名单
+- [x] 人格系统（通用 + 群私有，双层体系）
+- [x] MCP 工具调用（Agentic Loop）
+- [x] Playwright 浏览器工具（无头模式）
+- [ ] 本地自定义工具注册
+- [ ] 图片理解 / 多模态
