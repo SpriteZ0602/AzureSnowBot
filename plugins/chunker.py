@@ -44,8 +44,8 @@ def chunk_text(text: str) -> list[str]:
     """
     将文本拆分为适合分条发送的块。
 
-    主要按换行拆分：每个 \\n 就是一条新消息。
-    超长单行再按句子 → 硬切进一步拆分。
+    按换行拆分：每个 \\n 就是一条新消息。
+    超长单行硬切到 MAX_CHUNK_CHARS。
     短回复（< CHUNK_THRESHOLD）直接返回整条。
     """
     text = text.strip()
@@ -59,39 +59,17 @@ def chunk_text(text: str) -> list[str]:
     chunks: list[str] = []
 
     # 按单个换行拆分
-    lines = text.split("\n")
-
-    for line in lines:
+    for line in text.split("\n"):
         line = line.strip()
         if not line:
             continue
 
-        # 单行足够短，直接作为一条
-        if len(line) <= MAX_CHUNK_CHARS:
+        # 超长行硬切
+        while len(line) > MAX_CHUNK_CHARS:
+            chunks.append(line[:MAX_CHUNK_CHARS])
+            line = line[MAX_CHUNK_CHARS:]
+        if line:
             chunks.append(line)
-            continue
-
-        # 单行太长，按句子拆
-        sentences = _split_sentences(line)
-        buffer = ""
-        for sent in sentences:
-            sent = sent.strip()
-            if not sent:
-                continue
-            if len(buffer) + len(sent) + 1 <= MAX_CHUNK_CHARS:
-                buffer = f"{buffer}{sent}" if buffer else sent
-            else:
-                if buffer:
-                    chunks.append(buffer)
-                # 单句超长，硬切
-                if len(sent) > MAX_CHUNK_CHARS:
-                    while sent:
-                        chunks.append(sent[:MAX_CHUNK_CHARS])
-                        sent = sent[MAX_CHUNK_CHARS:]
-                else:
-                    buffer = sent
-        if buffer:
-            chunks.append(buffer)
 
     return chunks if chunks else [text]
 

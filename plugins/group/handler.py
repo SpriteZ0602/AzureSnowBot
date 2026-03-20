@@ -44,6 +44,14 @@ async def handle_group_chat(event: GroupMessageEvent):
     if not user_input:
         return
 
+    # 检查 /withoutChunking 标记
+    no_chunk = False
+    if user_input.startswith("/withoutChunking"):
+        no_chunk = True
+        user_input = user_input[len("/withoutChunking"):].strip()
+        if not user_input:
+            return
+
     if not OPENAI_API_KEY:
         await group_chat.finish("未配置 OpenAI API Key，请联系管理员。")
 
@@ -117,8 +125,14 @@ async def handle_group_chat(event: GroupMessageEvent):
                     if reply:
                         append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
                         bot = get_bot()
-                        chunks = chunk_text(reply)
-                        await send_chunked(bot, event, chunks)
+                        if no_chunk:
+                            await bot.send_group_msg(
+                                group_id=event.group_id,
+                                message=MessageSegment.reply(event.message_id) + reply,
+                            )
+                        else:
+                            chunks = chunk_text(reply)
+                            await send_chunked(bot, event, chunks)
                     return
 
                 messages.append(assistant_msg)
