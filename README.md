@@ -25,7 +25,7 @@
 
 | 指令 | 说明 |
 |------|------|
-| 任意消息 | 调用 LLM 进行多轮对话 |
+| 任意消息 | 调用 LLM 进行多轮对话（支持引用消息） |
 | `/reset` | 清空当前用户的对话历史 |
 | `ping` | 回复 `pong~`，检测 Bot 是否在线 |
 
@@ -35,10 +35,11 @@
 
 - **通用人格**：`data/personas/<name>.txt`，所有群共享
 - **群私有人格**：`data/sessions/groups/<gid>/personas/<name>.txt`，仅该群可见
+- **管理员私聊人格**：`data/sessions/admin_persona.txt`，仅 `ADMIN_NUMBER` 对应的私聊用户使用
 
 查找优先级：群私有 > 通用（同名时群的覆盖通用）
 
-内置人格：`default`、`catgirl`、`philosopher`、`roaster`
+默认至少需要准备：`data/personas/default.txt`
 
 ### MCP 工具调用
 
@@ -83,6 +84,7 @@ data/skills/<skill-name>/
 - **NapCat** — 基于 NTQQ 的无头 Bot 框架，提供 OneBot 11 协议支持
 - **NoneBot2** — Python 异步 Bot 框架，负责消息处理与插件管理
 - **OpenAI-compatible API** — 大模型对话（默认模型 gpt-5.4，可配置）
+- **DashScope 兼容接口** — 可通过启动参数切换到 `qwen-plus`
 - **MCP SDK** — Model Context Protocol 客户端，连接外部工具服务器
 
 ## 项目结构
@@ -115,11 +117,10 @@ AzureSnowBot/
 │   │   ├── translator/            #   翻译技能
 │   │   └── code-reviewer/         #   代码审查技能 (+ references/)
 │   ├── personas/                  # 通用人格 prompt 文件
-│   │   ├── default.txt
-│   │   ├── catgirl.txt
-│   │   ├── philosopher.txt
-│   │   └── roaster.txt
+│   │   ├── _base.txt
+│   │   └── default.txt
 │   └── sessions/                  # 对话历史（JSONL）
+│       ├── admin_persona.txt      #   管理员私聊专属人格
 │       ├── <user_id>.jsonl        #   私聊会话
 │       └── groups/
 │           └── <group_id>/
@@ -161,7 +162,9 @@ PORT=8082
 OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-5.4
+DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxx
 GROUP_WHITELIST=["群号1", "群号2"]
+ADMIN_NUMBER=你的QQ号
 ```
 
 | 变量 | 说明 | 默认值 |
@@ -169,15 +172,25 @@ GROUP_WHITELIST=["群号1", "群号2"]
 | `OPENAI_API_KEY` | OpenAI 兼容 API 密钥 | （必填） |
 | `OPENAI_BASE_URL` | API 基地址 | `https://api.openai.com/v1` |
 | `OPENAI_MODEL` | 模型名称 | `gpt-5.4` |
+| `DASHSCOPE_API_KEY` | DashScope API 密钥，用于 `qwen` 模式 | 空 |
 | `GROUP_WHITELIST` | 允许使用的群号列表（JSON 数组） | `[]`（空 = 不响应任何群） |
+| `ADMIN_NUMBER` | 管理员 QQ 号，该用户私聊时读取专属人格 | 空 |
 
-2. 在 NapCat WebUI 中添加 **WebSocket 客户端**，地址设为：
+2. 如果需要管理员私聊专属人格，创建文件：
+
+```text
+data/sessions/admin_persona.txt
+```
+
+当私聊用户 QQ 号与 `ADMIN_NUMBER` 一致时，会优先使用这个文件作为 system prompt。
+
+3. 在 NapCat WebUI 中添加 **WebSocket 客户端**，地址设为：
 
 ```
 ws://localhost:8082/onebot/v11/ws
 ```
 
-3.（可选）配置 MCP 服务器，编辑 `data/mcp_servers.json`：
+4.（可选）配置 MCP 服务器，编辑 `data/mcp_servers.json`：
 
 ```json
 {
@@ -198,11 +211,31 @@ ws://localhost:8082/onebot/v11/ws
 python main.py
 ```
 
+如需切换到 DashScope 的 `qwen-plus`：
+
+```bash
+python main.py qwen
+```
+
+此模式会自动使用：
+
+- `OPENAI_API_KEY = DASHSCOPE_API_KEY`
+- `OPENAI_BASE_URL = https://dashscope.aliyuncs.com/compatible-mode/v1`
+- `OPENAI_MODEL = qwen-plus`
+
+如果你之前开着旧终端，建议重新开一个终端再启动，避免残留环境变量影响切换结果。
+
 ### 添加人格
 
 在 `data/personas/` 下创建 `<名称>.txt` 文件，内容为 system prompt，即可全局使用。
 
 也可以在群聊中通过 `/persona create <名称> <prompt>` 创建仅限该群的私有人格。
+
+如果某个人格只想给单个群使用，请放到：
+
+```text
+data/sessions/groups/<group_id>/personas/<name>.txt
+```
 
 ### 创建技能 (Skill)
 

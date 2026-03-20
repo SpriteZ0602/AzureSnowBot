@@ -23,7 +23,7 @@ from ..skill.manager import (
     handle_tool_call as skill_handle_tool_call,
 )
 from .utils import (
-    OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL,
+    OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, LLM_PROVIDER,
     in_whitelist, is_at_bot, extract_text,
     get_reply_id, fetch_quoted_text, trim_history,
 )

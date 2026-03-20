@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 
 from nonebot import get_driver
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Bot
@@ -12,9 +13,10 @@ from nonebot.log import logger
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
-OPENAI_API_KEY: str = getattr(config, "openai_api_key", "")
-OPENAI_BASE_URL: str = getattr(config, "openai_base_url", "https://api.openai.com/v1")
-OPENAI_MODEL: str = getattr(config, "openai_model", "gpt-5.4")
+OPENAI_API_KEY: str = getattr(config, "openai_api_key", "") or os.environ.get("OPENAI_API_KEY", "")
+OPENAI_BASE_URL: str = getattr(config, "openai_base_url", "") or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_MODEL: str = getattr(config, "openai_model", "") or os.environ.get("OPENAI_MODEL", "gpt-5.4")
+LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "openai")
 
 # 群聊白名单
 _raw_whitelist = getattr(config, "group_whitelist", [])

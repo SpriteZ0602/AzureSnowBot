@@ -5,11 +5,12 @@
 """
 
 import json
+import os
 from pathlib import Path
 
 import httpx
 from nonebot import on_message, on_fullmatch, get_driver, get_bot
-from nonebot.adapters.onebot.v11 import PrivateMessageEvent
+from nonebot.adapters.onebot.v11 import PrivateMessageEvent, Bot
 from nonebot.exception import FinishedException
 from nonebot.log import logger
 
@@ -17,9 +18,11 @@ from ..chunker import chunk_text, send_chunked
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
-OPENAI_API_KEY: str = getattr(config, "openai_api_key", "")
-OPENAI_BASE_URL: str = getattr(config, "openai_base_url", "https://api.openai.com/v1")
-OPENAI_MODEL: str = getattr(config, "openai_model", "gpt-5.4")
+OPENAI_API_KEY: str = getattr(config, "openai_api_key", "") or os.environ.get("OPENAI_API_KEY", "")
+OPENAI_BASE_URL: str = getattr(config, "openai_base_url", "") or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_MODEL: str = getattr(config, "openai_model", "") or os.environ.get("OPENAI_MODEL", "gpt-5.4")
+LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "openai")
+ADMIN_NUMBER: str = getattr(config, "admin_number", "373900859")
 
 # 加载公共基底提示词
 from pathlib import Path as _Path
@@ -29,6 +32,10 @@ _BASE_PROMPT = _base_path.read_text(encoding="utf-8").strip() if _base_path.exis
 SYSTEM_PROMPT = "你是一个有用的助手，请用中文回答用户的问题。"
 if _BASE_PROMPT:
     SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n\n{_BASE_PROMPT}"
+
+# 加载 Admin 专属人格
+_admin_persona_path = _Path("data/sessions/admin_persona.txt")
+ADMIN_PROMPT = _admin_persona_path.read_text(encoding="utf-8").strip() if _admin_persona_path.exists() else ""
 
 # 256K 上下文窗口，预留 20% 安全缓冲 + 4096 给回复
 MAX_CONTEXT_TOKENS = 256_000
@@ -131,16 +138,44 @@ async def handle_chat(event: PrivateMessageEvent):
 
     user_id = str(event.user_id)
 
-    # 记录用户消息
-    user_msg = {"role": "user", "content": user_input}
+    # 检查是否引用了消息
+    quoted_text = ""
+    reply_id = None
+    if event.reply:
+        reply_id = event.reply.message_id
+    else:
+        for seg in event.message:
+            if seg.type == "reply":
+                reply_id = int(seg.data["id"])
+                break
+    if reply_id:
+        try:
+            bot = get_bot()
+            msg_data = await bot.get_msg(message_id=reply_id)
+            raw_msg = msg_data.get("message", "")
+            if isinstance(raw_msg, str):
+                quoted_text = raw_msg.strip()
+            elif isinstance(raw_msg, list):
+                parts = [seg.get("data", {}).get("text", "") for seg in raw_msg if isinstance(seg, dict) and seg.get("type") == "text"]
+                quoted_text = "".join(parts).strip()
+        except Exception as e:
+            logger.warning(f"获取引用消息失败: {e}")
+
+    # 记录用户消息（带引用内容）
+    if quoted_text:
+        content = f"(引用了一条消息: \"{quoted_text}\"): {user_input}"
+    else:
+        content = user_input
+    user_msg = {"role": "user", "content": content}
     append_message(user_id, user_msg)
 
     # 加载历史并截断
     history = load_history(user_id)
     trimmed = trim_history(history)
 
-    # 组装 messages
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + trimmed
+    # 组装 messages（Admin 使用专属人格）
+    prompt = ADMIN_PROMPT if (ADMIN_NUMBER and user_id == str(ADMIN_NUMBER) and ADMIN_PROMPT) else SYSTEM_PROMPT
+    messages = [{"role": "system", "content": prompt}] + trimmed
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
