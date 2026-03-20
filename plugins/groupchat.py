@@ -26,7 +26,7 @@ else:
 
 logger.info(f"群聊白名单: {GROUP_WHITELIST}")
 
-SYSTEM_PROMPT = "你是一个群聊助手，回复时不需要 @用户。"
+SYSTEM_PROMPT = "你是一个群聊助手，回复时不需要 @用户，不要使用markdown格式，请用不太冗长的中文回答用户的问题。"
 
 # 群聊历史限制更严格，避免 token 消耗过快
 MAX_CONTEXT_TOKENS = 256_000
