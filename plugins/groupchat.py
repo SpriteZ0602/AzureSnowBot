@@ -7,6 +7,8 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageSegment, Bot, 
 from nonebot.exception import FinishedException
 from nonebot.log import logger
 
+from . import persona_manager as pm
+
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
 OPENAI_API_KEY: str = getattr(config, "openai_api_key", "")
@@ -26,17 +28,11 @@ else:
 
 logger.info(f"群聊白名单: {GROUP_WHITELIST}")
 
-SYSTEM_PROMPT = "你是一个群聊助手，回复时不需要 @用户，不要使用markdown格式，请用不太冗长的中文回答用户的问题。"
-
 # 群聊历史限制更严格，避免 token 消耗过快
 MAX_CONTEXT_TOKENS = 256_000
 SAFETY_MARGIN = 0.8
 REPLY_RESERVE = 4096
 MAX_HISTORY_TOKENS = int(MAX_CONTEXT_TOKENS * SAFETY_MARGIN) - REPLY_RESERVE
-
-# 会话文件目录（群聊按 group_id 存储）
-SESSION_DIR = Path("data/sessions/groups")
-SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ──────────────────── Token 估算 ────────────────────
@@ -50,41 +46,9 @@ def estimate_message_tokens(msg: dict) -> int:
     return estimate_tokens(msg.get("content", "")) + 4
 
 
-# ──────────────────── JSONL 会话持久化 ────────────────────
-def _session_path(group_id: str) -> Path:
-    return SESSION_DIR / f"{group_id}.jsonl"
-
-
-def load_history(group_id: str) -> list[dict]:
-    path = _session_path(group_id)
-    if not path.exists():
-        return []
-    messages = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            try:
-                messages.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return messages
-
-
-def append_message(group_id: str, message: dict) -> None:
-    path = _session_path(group_id)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(message, ensure_ascii=False) + "\n")
-
-
-def clear_history(group_id: str) -> None:
-    path = _session_path(group_id)
-    if path.exists():
-        path.unlink()
-
-
 # ──────────────────── 历史截断 ────────────────────
-def trim_history(messages: list[dict]) -> list[dict]:
-    system_tokens = estimate_message_tokens({"role": "system", "content": SYSTEM_PROMPT})
+def trim_history(messages: list[dict], system_prompt: str) -> list[dict]:
+    system_tokens = estimate_message_tokens({"role": "system", "content": system_prompt})
     budget = MAX_HISTORY_TOKENS - system_tokens
     trimmed: list[dict] = []
     total = 0
@@ -153,7 +117,7 @@ def in_whitelist(group_id: int) -> bool:
 
 
 # ──────────────────── 清除对话指令 ────────────────────
-group_reset = on_fullmatch("清除对话", priority=10, block=True)
+group_reset = on_fullmatch("/reset", priority=10, block=True)
 
 
 @group_reset.handle()
@@ -162,8 +126,9 @@ async def handle_group_reset(event: GroupMessageEvent):
         return
     if not is_at_bot(event):
         return
-    clear_history(str(event.group_id))
-    await group_reset.finish("✅ 本群对话历史已清除。")
+    group_id = str(event.group_id)
+    pm.clear_history(group_id)
+    await group_reset.finish("本群对话历史已清除。")
 
 
 # ──────────────────── 群聊对话处理 ────────────────────
@@ -185,7 +150,7 @@ async def handle_group_chat(event: GroupMessageEvent):
         return
 
     if not OPENAI_API_KEY:
-        await group_chat.finish("⚠️ 未配置 OpenAI API Key，请联系管理员。")
+        await group_chat.finish("未配置 OpenAI API Key，请联系管理员。")
 
     # 检查是否引用了消息
     quoted_text = ""
@@ -197,19 +162,26 @@ async def handle_group_chat(event: GroupMessageEvent):
     group_id = str(event.group_id)
     sender = event.sender.nickname or str(event.user_id)
 
+    # 获取当前人格与 prompt
+    active_persona = pm.get_active_persona(group_id)
+    system_prompt = pm.load_persona_prompt(active_persona, group_id)
+    if system_prompt is None:
+        logger.warning(f"群 {group_id} 人格 {active_persona} 的 prompt 文件不存在，跳过响应")
+        return
+
     # 组装用户消息（带发送者标识 + 引用内容）
     if quoted_text:
         content = f"[{sender}] (引用了一条消息: \"{quoted_text}\"): {user_input}"
     else:
         content = f"[{sender}]: {user_input}"
     user_msg = {"role": "user", "content": content}
-    append_message(group_id, user_msg)
+    pm.append_message(group_id, user_msg, active_persona)
 
     # 加载历史并截断
-    history = load_history(group_id)
-    trimmed = trim_history(history)
+    history = pm.load_history(group_id, active_persona)
+    trimmed = trim_history(history, system_prompt)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + trimmed
+    messages = [{"role": "system", "content": system_prompt}] + trimmed
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -231,7 +203,7 @@ async def handle_group_chat(event: GroupMessageEvent):
             data = resp.json()
             reply = data["choices"][0]["message"]["content"].strip()
 
-            append_message(group_id, {"role": "assistant", "content": reply})
+            pm.append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
 
             # 引用原消息回复
             await group_chat.finish(
@@ -239,9 +211,9 @@ async def handle_group_chat(event: GroupMessageEvent):
             )
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
-        await group_chat.finish(f"⚠️ API 请求失败 ({e.response.status_code})")
+        await group_chat.finish(f"API 请求失败 ({e.response.status_code})")
     except FinishedException:
         raise
     except Exception as e:
         logger.error(f"群聊 ChatGPT 插件异常: {e}")
-        await group_chat.finish("⚠️ 请求出错，请稍后再试。")
+        await group_chat.finish("请求出错，请稍后再试。")

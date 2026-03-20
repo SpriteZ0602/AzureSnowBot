@@ -92,13 +92,13 @@ def trim_history(messages: list[dict]) -> list[dict]:
 
 
 # ──────────────────── 清除对话指令 ────────────────────
-reset = on_fullmatch("清除对话", priority=10, block=True)
+reset = on_fullmatch("/reset", priority=10, block=True)
 
 
 @reset.handle()
 async def handle_reset(event: PrivateMessageEvent):
     clear_history(str(event.user_id))
-    await reset.finish("✅ 对话历史已清除。")
+    await reset.finish("对话历史已清除。")
 
 
 # ──────────────────── 主对话处理 ────────────────────
@@ -112,7 +112,7 @@ async def handle_chat(event: PrivateMessageEvent):
         return
 
     if not OPENAI_API_KEY:
-        await chat.finish("⚠️ 未配置 OpenAI API Key，请联系管理员。")
+        await chat.finish("未配置 OpenAI API Key，请联系管理员。")
 
     user_id = str(event.user_id)
 
@@ -153,9 +153,9 @@ async def handle_chat(event: PrivateMessageEvent):
             await chat.finish(reply)
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
-        await chat.finish(f"⚠️ API 请求失败 ({e.response.status_code})")
+        await chat.finish(f"API 请求失败 ({e.response.status_code})")
     except FinishedException:
         raise
     except Exception as e:
         logger.error(f"ChatGPT 插件异常: {e}")
-        await chat.finish("⚠️ 请求出错，请稍后再试。")
+        await chat.finish("请求出错，请稍后再试。")
