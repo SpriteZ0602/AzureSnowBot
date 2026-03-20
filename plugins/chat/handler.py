@@ -1,3 +1,9 @@
+"""
+私聊对话处理
+──────────
+私聊消息的 ChatGPT 对话处理。
+"""
+
 import json
 from pathlib import Path
 

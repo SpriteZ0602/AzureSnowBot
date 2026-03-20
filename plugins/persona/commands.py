@@ -17,10 +17,8 @@ from nonebot import on_startswith
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageSegment
 from nonebot.log import logger
 
-from . import persona_manager as pm
-
-# ──────────────────── 白名单复用 ────────────────────
-from .groupchat import in_whitelist, is_at_bot
+from . import manager as pm
+from ..group.utils import in_whitelist, is_at_bot
 
 
 # ──────────────────── /persona 指令 ────────────────────
