@@ -27,6 +27,7 @@ from .utils import (
     in_whitelist, is_at_bot, extract_text,
     get_reply_id, fetch_quoted_text, trim_history,
 )
+from ..chunker import chunk_text, send_chunked
 
 # ──────────────────── 群聊对话处理 ────────────────────
 group_chat = on_message(priority=98, block=False)
@@ -115,9 +116,9 @@ async def handle_group_chat(event: GroupMessageEvent):
                     reply = (assistant_msg.get("content") or "").strip()
                     if reply:
                         append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
-                        await group_chat.finish(
-                            MessageSegment.reply(event.message_id) + reply
-                        )
+                        bot = get_bot()
+                        chunks = chunk_text(reply)
+                        await send_chunked(bot, event, chunks)
                     return
 
                 messages.append(assistant_msg)
@@ -149,9 +150,8 @@ async def handle_group_chat(event: GroupMessageEvent):
             # 超过最大轮次
             reply = "（工具调用轮次已达上限，请重新提问）"
             append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
-            await group_chat.finish(
-                MessageSegment.reply(event.message_id) + reply
-            )
+            bot = get_bot()
+            await send_chunked(bot, event, [reply])
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await group_chat.finish(f"API 请求失败 ({e.response.status_code})")

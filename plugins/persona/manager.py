@@ -75,17 +75,30 @@ def is_global_persona(name: str) -> bool:
 
 
 def load_persona_prompt(name: str, group_id: str | None = None) -> str | None:
-    """加载人格 prompt，群私有优先，找不到返回 None"""
-    # 先查群私有
+    """加载人格 prompt，自动拼装 _base.txt 公共指令 + 人格内容"""
+    # 加载公共基底提示词
+    base_path = GLOBAL_PERSONA_DIR / "_base.txt"
+    base_prompt = ""
+    if base_path.exists():
+        base_prompt = base_path.read_text(encoding="utf-8").strip()
+
+    # 加载人格提示词（群私有优先）
+    persona_prompt = None
     if group_id:
         group_path = _group_persona_dir(group_id) / f"{name}.txt"
         if group_path.exists():
-            return group_path.read_text(encoding="utf-8").strip()
-    # 再查通用
-    global_path = GLOBAL_PERSONA_DIR / f"{name}.txt"
-    if global_path.exists():
-        return global_path.read_text(encoding="utf-8").strip()
-    return None
+            persona_prompt = group_path.read_text(encoding="utf-8").strip()
+    if persona_prompt is None:
+        global_path = GLOBAL_PERSONA_DIR / f"{name}.txt"
+        if global_path.exists():
+            persona_prompt = global_path.read_text(encoding="utf-8").strip()
+    if persona_prompt is None:
+        return None
+
+    # 拼装：人格内容 + 公共指令
+    if base_prompt:
+        return f"{persona_prompt}\n\n{base_prompt}"
+    return persona_prompt
 
 
 # ──────────────────── 群私有人格增删 ────────────────────

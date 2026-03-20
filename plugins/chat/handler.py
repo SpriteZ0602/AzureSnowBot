@@ -8,10 +8,12 @@ import json
 from pathlib import Path
 
 import httpx
-from nonebot import on_message, on_fullmatch, get_driver
+from nonebot import on_message, on_fullmatch, get_driver, get_bot
 from nonebot.adapters.onebot.v11 import PrivateMessageEvent
 from nonebot.exception import FinishedException
 from nonebot.log import logger
+
+from ..chunker import chunk_text, send_chunked
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
@@ -19,7 +21,14 @@ OPENAI_API_KEY: str = getattr(config, "openai_api_key", "")
 OPENAI_BASE_URL: str = getattr(config, "openai_base_url", "https://api.openai.com/v1")
 OPENAI_MODEL: str = getattr(config, "openai_model", "gpt-5.4")
 
-SYSTEM_PROMPT = "你是一个有用的助手。请用简洁的中文回答用户的问题。"
+# 加载公共基底提示词
+from pathlib import Path as _Path
+_base_path = _Path("data/personas/_base.txt")
+_BASE_PROMPT = _base_path.read_text(encoding="utf-8").strip() if _base_path.exists() else ""
+
+SYSTEM_PROMPT = "你是一个有用的助手，请用中文回答用户的问题。"
+if _BASE_PROMPT:
+    SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n\n{_BASE_PROMPT}"
 
 # 256K 上下文窗口，预留 20% 安全缓冲 + 4096 给回复
 MAX_CONTEXT_TOKENS = 256_000
@@ -156,7 +165,9 @@ async def handle_chat(event: PrivateMessageEvent):
             # 记录助手回复
             append_message(user_id, {"role": "assistant", "content": reply})
 
-            await chat.finish(reply)
+            bot = get_bot()
+            chunks = chunk_text(reply)
+            await send_chunked(bot, event, chunks, reply_first=False)
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await chat.finish(f"API 请求失败 ({e.response.status_code})")
