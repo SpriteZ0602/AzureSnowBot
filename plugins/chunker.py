@@ -130,3 +130,38 @@ async def send_chunked(
             if i < len(chunks) - 1:
                 delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX)
                 await asyncio.sleep(delay)
+
+
+async def send_chunked_raw(
+    bot: Bot,
+    chat_type: str,
+    target_id: int,
+    text: str,
+) -> None:
+    """
+    无需 event 对象的分条发送。供提醒等主动推送场景使用。
+
+    参数:
+        bot: NoneBot Bot 实例
+        chat_type: "group" 或 "private"
+        target_id: group_id 或 user_id
+        text: 要发送的完整文本
+    """
+    chunks = chunk_text(text)
+    if not chunks:
+        return
+
+    key = f"{'g' if chat_type == 'group' else 'u'}:{target_id}"
+
+    async with _session_locks[key]:
+        for i, chunk in enumerate(chunks):
+            msg = Message(chunk)
+
+            if chat_type == "group":
+                await bot.send_group_msg(group_id=target_id, message=msg)
+            else:
+                await bot.send_private_msg(user_id=target_id, message=msg)
+
+            if i < len(chunks) - 1:
+                delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX)
+                await asyncio.sleep(delay)

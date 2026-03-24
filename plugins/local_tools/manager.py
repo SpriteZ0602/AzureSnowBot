@@ -109,10 +109,16 @@ def get_openai_tools() -> list[dict]:
 
 # ──────────────────── 工具调用分发 ────────────────────
 
-async def handle_tool_call(full_name: str, arguments: dict) -> str | None:
+async def handle_tool_call(
+    full_name: str,
+    arguments: dict,
+    *,
+    context: dict | None = None,
+) -> str | None:
     """
     处理本地工具调用。
     full_name 格式: "local__<tool_name>"
+    context: 可选的调用上下文（_chat_type, _target_id, _user_id, _sender_name）
     返回结果字符串，如果不属于本地工具返回 None。
     """
     if not full_name.startswith(f"{TOOL_PREFIX}__"):
@@ -124,7 +130,10 @@ async def handle_tool_call(full_name: str, arguments: dict) -> str | None:
         return f"[错误] 本地工具 '{tool_name}' 不存在"
 
     try:
-        result = tool.execute(**arguments)
+        call_args = {**arguments}
+        if context:
+            call_args["_context"] = context
+        result = tool.execute(**call_args)
         # 支持同步和异步函数
         if inspect.isawaitable(result):
             result = await result

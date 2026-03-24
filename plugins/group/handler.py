@@ -81,6 +81,14 @@ async def handle_group_chat(event: GroupMessageEvent):
     if skill_catalog:
         system_prompt += "\n" + skill_catalog
 
+    # 构建工具调用上下文（供需要环境信息的工具使用，如定时提醒）
+    _tool_context = {
+        "_chat_type": "group",
+        "_target_id": group_id,
+        "_user_id": str(event.user_id),
+        "_sender_name": sender,
+    }
+
     # 组装用户消息（带发送者标识 + 引用内容）
     if quoted_text:
         content = f"[{sender}] (引用了一条消息: \"{quoted_text}\"): {user_input}"
@@ -155,7 +163,7 @@ async def handle_group_chat(event: GroupMessageEvent):
                     if skill_result is not None:
                         tool_result = skill_result
                     else:
-                        local_result = await local_handle_tool_call(fn_name, fn_args)
+                        local_result = await local_handle_tool_call(fn_name, fn_args, context=_tool_context)
                         if local_result is not None:
                             tool_result = local_result
                         else:

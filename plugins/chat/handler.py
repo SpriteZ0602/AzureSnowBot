@@ -15,6 +15,10 @@ from nonebot.exception import FinishedException
 from nonebot.log import logger
 
 from ..chunker import chunk_text, send_chunked
+from ..local_tools.manager import (
+    get_openai_tools as local_openai_tools,
+    handle_tool_call as local_handle_tool_call,
+)
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
@@ -186,23 +190,75 @@ async def handle_chat(event: PrivateMessageEvent):
         "messages": messages,
     }
 
+    # 本地工具注入
+    openai_tools = local_openai_tools()
+    if openai_tools:
+        payload["tools"] = openai_tools
+
+    # 工具调用上下文
+    sender_name = getattr(event, "sender", None)
+    sender_name = getattr(sender_name, "nickname", None) or str(event.user_id)
+    _tool_context = {
+        "_chat_type": "private",
+        "_target_id": user_id,
+        "_user_id": user_id,
+        "_sender_name": sender_name,
+    }
+
+    MAX_TOOL_ROUNDS = 10
+
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"{OPENAI_BASE_URL}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            reply = data["choices"][0]["message"]["content"].strip()
+        async with httpx.AsyncClient(timeout=120) as client:
+            for round_idx in range(MAX_TOOL_ROUNDS):
+                resp = await client.post(
+                    f"{OPENAI_BASE_URL}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                choice = data["choices"][0]
+                assistant_msg = choice["message"]
 
-            # 记录助手回复
+                tool_calls = assistant_msg.get("tool_calls")
+                if not tool_calls:
+                    reply = (assistant_msg.get("content") or "").strip()
+                    if reply:
+                        append_message(user_id, {"role": "assistant", "content": reply})
+                        bot = get_bot()
+                        chunks = chunk_text(reply)
+                        await send_chunked(bot, event, chunks, reply_first=False)
+                    return
+
+                # 处理工具调用
+                messages.append(assistant_msg)
+                logger.info(f"私聊 LLM 请求工具调用 (round {round_idx + 1}): "
+                            f"{[tc['function']['name'] for tc in tool_calls]}")
+
+                for tc in tool_calls:
+                    fn_name = tc["function"]["name"]
+                    try:
+                        fn_args = json.loads(tc["function"]["arguments"])
+                    except json.JSONDecodeError:
+                        fn_args = {}
+
+                    tool_result = await local_handle_tool_call(fn_name, fn_args, context=_tool_context)
+                    if tool_result is None:
+                        tool_result = f"[错误] 未知工具: {fn_name}"
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": tool_result,
+                    })
+
+                payload["messages"] = messages
+
+            # 超过最大轮次
+            reply = "（工具调用轮次已达上限，请重新提问）"
             append_message(user_id, {"role": "assistant", "content": reply})
-
             bot = get_bot()
-            chunks = chunk_text(reply)
-            await send_chunked(bot, event, chunks, reply_first=False)
+            await send_chunked(bot, event, [reply], reply_first=False)
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await chat.finish(f"API 请求失败 ({e.response.status_code})")

@@ -26,7 +26,7 @@
 
 | 指令 | 说明 |
 |------|------|
-| 任意消息 | 调用 LLM 进行多轮对话（支持引用消息） |
+| 任意消息 | 调用 LLM 进行多轮对话（支持引用消息 + 工具调用） |
 | `/reset` | 清空当前用户的对话历史 |
 | `ping` | 回复 `pong~`，检测 Bot 是否在线 |
 
@@ -80,10 +80,24 @@
 | `current_time` | 获取当前日期、时间和星期 |
 | `calculate` | 安全的数学表达式求值 |
 | `random_number` | 生成指定范围的随机整数 |
+| `set_reminder` | 一次性定时提醒（"X分钟后提醒我做Y"） |
+| `set_daily_reminder` | 每日定时提醒（"每天9点提醒我签到"） |
+| `cancel_reminder` | 取消已设置的提醒（一次性/每日） |
+| `list_reminders` | 查看当前对话的待触发提醒 |
 
 添加新工具只需在 `plugins/local_tools/tools.py` 中编写函数并加上 `@register_tool` 装饰器，重启即可。
 
 工具调用优先级：Skill 工具 → 本地工具 → MCP 工具。
+
+### 定时提醒
+
+参考 OpenClaw 的 cron 调度器设计，内置定时提醒功能：
+
+- **一次性提醒**："30分钟后提醒我开会" → `set_reminder`
+- **每日定时**："每天早上9点提醒我签到" → `set_daily_reminder`（持续触发直到取消）
+- **AI 生成消息**：提醒触发时自动加载群聊/私聊上下文，调用 LLM 生成自然的提醒消息（而非固定模板）
+- **持久化**：`data/reminders.json`，Bot 重启不丢失
+- 支持查看和取消已设置的提醒
 
 ### Skill 技能系统（渐进式披露）
 
@@ -139,6 +153,9 @@ AzureSnowBot/
 │   ├── local_tools/               #   本地工具注册系统
 │   │   ├── manager.py             #     @register_tool 装饰器 + 调度
 │   │   └── tools.py               #     内置工具实现
+│   ├── reminder/                  #   定时提醒调度器
+│   │   ├── __init__.py            #     启动时重载持久化提醒
+│   │   └── scheduler.py           #     asyncio 定时任务 + JSON 持久化
 │   └── mcp/                       #   MCP 工具集成
 │       └── manager.py             #     MCP 服务器连接 + 工具调用
 ├── data/
@@ -154,6 +171,7 @@ AzureSnowBot/
 │   │   ├── catgirl.txt            #   猫娘
 │   │   ├── philosopher.txt        #   哲学家
 │   │   └── roaster.txt            #   毒舌
+│   ├── reminders.json             # 定时提醒持久化数据
 │   └── sessions/                  # 对话历史（JSONL）
 │       ├── admin_persona.txt      #   管理员私聊专属人格
 │       ├── <user_id>.jsonl        #   私聊会话
@@ -318,4 +336,6 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] Skill 技能系统（渐进式披露）
 - [x] 本地自定义工具注册
 - [x] 消息分条发送 + 仿真人节奏
+- [x] 定时提醒（参考 OpenClaw cron 调度器）
+- [x] 私聊工具调用（Agentic Loop）
 - [ ] 图片理解 / 多模态
