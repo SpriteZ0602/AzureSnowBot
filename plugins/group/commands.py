@@ -10,6 +10,7 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageSegment
 from ..persona.manager import clear_history as pm_clear_history
 from ..mcp.manager import list_tools_summary
 from ..skill.manager import list_skills_summary
+from ..local_tools.manager import list_tools_summary as local_tools_summary
 from .utils import in_whitelist, is_at_bot
 
 # ──────────────────── /reset ────────────────────
@@ -57,6 +58,9 @@ async def handle_help(event: GroupMessageEvent):
     skill_lines = list_skills_summary()
     if skill_lines:
         text += "\n\n已加载技能（渐进式披露，模型按需加载）：\n" + "\n".join(skill_lines)
+    local_lines = local_tools_summary()
+    if local_lines:
+        text += "\n\n本地工具（模型自动调用）：\n" + "\n".join(local_lines)
 
     await help_cmd.finish(
         MessageSegment.reply(event.message_id) + text

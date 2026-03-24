@@ -18,9 +18,9 @@ from ..chunker import chunk_text, send_chunked
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
-OPENAI_API_KEY: str = getattr(config, "openai_api_key", "") or os.environ.get("OPENAI_API_KEY", "")
-OPENAI_BASE_URL: str = getattr(config, "openai_base_url", "") or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-OPENAI_MODEL: str = getattr(config, "openai_model", "") or os.environ.get("OPENAI_MODEL", "gpt-5.4")
+OPENAI_API_KEY: str = getattr(config, "gemini_api_key", "") or os.environ.get("GEMINI_API_KEY", "")
+OPENAI_BASE_URL: str = getattr(config, "gemini_base_url", "") or os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+OPENAI_MODEL: str = getattr(config, "gemini_model", "") or os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "openai")
 ADMIN_NUMBER: str = getattr(config, "admin_number", "373900859")
 

@@ -22,6 +22,10 @@ from ..skill.manager import (
     get_openai_tools as skill_openai_tools,
     handle_tool_call as skill_handle_tool_call,
 )
+from ..local_tools.manager import (
+    get_openai_tools as local_openai_tools,
+    handle_tool_call as local_handle_tool_call,
+)
 from .utils import (
     OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, LLM_PROVIDER,
     in_whitelist, is_at_bot, extract_text,
@@ -100,8 +104,8 @@ async def handle_group_chat(event: GroupMessageEvent):
         "messages": messages,
     }
 
-    # 合并 MCP 工具 + Skill 工具
-    openai_tools = get_openai_tools() + skill_openai_tools()
+    # 合并 MCP 工具 + Skill 工具 + 本地工具
+    openai_tools = get_openai_tools() + skill_openai_tools() + local_openai_tools()
     if openai_tools:
         payload["tools"] = openai_tools
 
@@ -146,12 +150,16 @@ async def handle_group_chat(event: GroupMessageEvent):
                     except json.JSONDecodeError:
                         fn_args = {}
 
-                    # 优先尝试 Skill 本地工具，再走 MCP
+                    # 分发链路：Skill → 本地工具 → MCP
                     skill_result = skill_handle_tool_call(fn_name, fn_args)
                     if skill_result is not None:
                         tool_result = skill_result
                     else:
-                        tool_result = await call_tool(fn_name, fn_args)
+                        local_result = await local_handle_tool_call(fn_name, fn_args)
+                        if local_result is not None:
+                            tool_result = local_result
+                        else:
+                            tool_result = await call_tool(fn_name, fn_args)
 
                     messages.append({
                         "role": "tool",
