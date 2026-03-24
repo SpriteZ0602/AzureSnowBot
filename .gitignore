@@ -3,4 +3,4 @@ __pycache__/
 .env
 vendor/
 reference/
-data/
+data/sessions
