@@ -26,3 +26,4 @@ async def _shutdown():
 # 加载子模块（触发 nonebot matcher 注册）
 from . import handler as handler     # noqa: E402, F401
 from . import commands as commands   # noqa: E402, F401
+from . import chatlog as chatlog     # noqa: E402, F401
