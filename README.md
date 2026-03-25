@@ -53,6 +53,7 @@
 - 第一条消息引用原消息，后续直接发送
 - 同一会话加锁，防止并发请求交错混乱
 - 发送 `/withoutChunking` 前缀可跳过分条，整条返回
+- 自动去除 LLM 回复开头的时间戳（如 `[2026-03-25 16:55:46]`），防止泄漏给用户
 
 ### MCP 工具调用
 
@@ -109,6 +110,17 @@
 - 支持按时间、发送者、关键词过滤查询
 - 不会传入 LLM 的普通请求，仅在工具调用时按需加载
 
+### 主动发言（Proactive Messaging）
+
+Admin 私聊专属功能 —— Bot 在对话结束一段时间后，自主决定是否主动找你聊天：
+
+- Bot 回复 admin 后启动空闲计时器（默认 1 小时，可通过 `PROACTIVE_IDLE_SECONDS` 配置）
+- admin 再次对话会重置计时器
+- 计时器到期后，携带完整对话历史询问 LLM 是否想主动说点什么
+- LLM 有话说 → 直接发送并写入对话历史；回复 NO → 无事发生
+- 主动发言后不重置计时器，避免自言自语循环；下次 admin 发消息并得到回复后才重新启动
+- Admin 执行 `/reset` 清空对话历史时自动取消空闲计时器
+
 ### Skill 技能系统（渐进式披露）
 
 借鉴 [OpenClaw AgentSkills](https://github.com/nicepkg/openclaw) 的设计理念，三层加载体系，最大限度节省上下文窗口：
@@ -151,7 +163,8 @@ AzureSnowBot/
 │   ├── ping.py                    #   存活检测
 │   ├── chunker.py                 #   消息分条发送 + 人类节奏模拟
 │   ├── chat/                      #   私聊对话
-│   │   └── handler.py
+│   │   ├── handler.py             #     消息处理 + Agentic Loop
+│   │   └── proactive.py           #     Admin 主动发言（空闲计时器）
 │   ├── group/                     #   群聊对话
 │   │   ├── handler.py             #     消息处理 + Agentic Loop
 │   │   ├── chatlog.py             #     全量群聊记录（旁路存储）
@@ -185,20 +198,26 @@ AzureSnowBot/
 │   │   ├── philosopher.txt        #   哲学家
 │   │   └── roaster.txt            #   毒舌
 │   ├── reminders.json             # 定时提醒持久化数据
-│   └── sessions/                  # 对话历史（JSONL）
-│       ├── admin_persona.txt      #   管理员私聊专属人格
-│       ├── <user_id>.jsonl        #   私聊会话
-│       └── groups/
-│           └── <group_id>/
-│               ├── _active.json   #   当前激活人格
-│               ├── <persona>.jsonl #  对话历史（按人格隔离）
-│               ├── _chatlog.jsonl  #  全量群聊记录
-│               └── personas/      #   群私有人格
+│   ├── admin/                     # 管理员私聊
+│   │   ├── admin_persona.txt      #   管理员专属人格
+│   │   ├── config.json            #   {"last_message_at": "..."}
+│   │   └── history.jsonl          #   对话历史
+│   ├── private/                   # 普通私聊
+│   │   └── <user_id>/
+│   │       ├── config.json        #   {"last_message_at": "..."}
+│   │       └── history.jsonl      #   对话历史
+│   └── sessions/groups/           # 群聊会话
+│       └── <group_id>/
+│           ├── config.json        #   {"active_persona": "...", "last_message_at": "..."}
+│           ├── <persona>.jsonl    #   对话历史（按人格隔离）
+│           ├── _chatlog.jsonl     #   全量群聊记录
+│           └── personas/          #   群私有人格
 ├── tests/                         # 单元测试
 │   ├── test_calculate.py
 │   ├── test_chatlog.py
 │   ├── test_chunker.py
 │   ├── test_persona.py
+│   ├── test_proactive.py
 │   ├── test_scheduler.py
 │   └── test_skill.py
 └── vendor/
@@ -267,14 +286,15 @@ ADMIN_NUMBER=你的QQ号
 | `LLM_BASE_URL` | （可选）覆盖默认接口地址 | 按 provider 自动选择 |
 | `GROUP_WHITELIST` | 允许使用的群号列表（JSON 数组） | `[]`（空 = 不响应任何群） |
 | `ADMIN_NUMBER` | 管理员 QQ 号，该用户私聊时读取专属人格 | 空 |
+| `PROACTIVE_IDLE_SECONDS` | Admin 私聊主动发言空闲等待秒数 | `3600`（1 小时） |
 
 2. 如果需要管理员私聊专属人格，创建文件：
 
 ```text
-data/sessions/admin_persona.txt
+data/admin/admin_persona.txt
 ```
 
-当私聊用户 QQ 号与 `ADMIN_NUMBER` 一致时，会优先使用这个文件作为 system prompt。
+当私聊用户 QQ 号与 `ADMIN_NUMBER` 一致时，会优先使用这个文件作为 system prompt。（首次启动时会自动从旧路径 `data/sessions/admin_persona.txt` 迁移）
 
 3. 在 NapCat WebUI 中添加 **WebSocket 客户端**，地址设为：
 
@@ -379,4 +399,5 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] 消息分条发送 + 仿真人节奏
 - [x] 定时提醒（参考 OpenClaw cron 调度器）
 - [x] 私聊工具调用（Agentic Loop）
+- [x] Admin 主动发言（空闲计时器 + LLM 自主决策）
 - [ ] 图片理解 / 多模态
