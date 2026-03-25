@@ -5,6 +5,7 @@
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -18,23 +19,29 @@ from ..local_tools.manager import (
     get_openai_tools as local_openai_tools,
     handle_tool_call as local_handle_tool_call,
 )
+from .proactive import reset_idle_timer, cancel_idle_timer
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
 from ..llm import API_KEY as OPENAI_API_KEY, BASE_URL as OPENAI_BASE_URL, MODEL as OPENAI_MODEL
-ADMIN_NUMBER: str = getattr(config, "admin_number", "373900859")
+ADMIN_NUMBER: str = str(getattr(config, "admin_number", ""))
+
+# 会话目录
+ADMIN_DIR = Path("data/admin")
+ADMIN_DIR.mkdir(parents=True, exist_ok=True)
+PRIVATE_DIR = Path("data/private")
+PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
 
 # 加载公共基底提示词
-from pathlib import Path as _Path
-_base_path = _Path("data/personas/_base.txt")
+_base_path = Path("data/personas/_base.txt")
 _BASE_PROMPT = _base_path.read_text(encoding="utf-8").strip() if _base_path.exists() else ""
 
 SYSTEM_PROMPT = "你是一个有用的助手，请用中文回答用户的问题。"
 if _BASE_PROMPT:
     SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n\n{_BASE_PROMPT}"
 
-# 加载 Admin 专属人格
-_admin_persona_path = _Path("data/sessions/admin_persona.txt")
+# 加载 Admin 专属人格（迁移后路径）
+_admin_persona_path = ADMIN_DIR / "admin_persona.txt"
 ADMIN_PROMPT = _admin_persona_path.read_text(encoding="utf-8").strip() if _admin_persona_path.exists() else ""
 
 # 256K 上下文窗口，预留 20% 安全缓冲 + 4096 给回复
@@ -42,10 +49,6 @@ MAX_CONTEXT_TOKENS = 256_000
 SAFETY_MARGIN = 0.8
 REPLY_RESERVE = 4096
 MAX_HISTORY_TOKENS = int(MAX_CONTEXT_TOKENS * SAFETY_MARGIN) - REPLY_RESERVE
-
-# 会话文件目录
-SESSION_DIR = Path("data/sessions")
-SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ──────────────────── Token 估算 ────────────────────
@@ -61,10 +64,46 @@ def estimate_message_tokens(msg: dict) -> int:
     return estimate_tokens(msg.get("content", "")) + 4
 
 
-# ──────────────────── JSONL 会话持久化 ────────────────────
-def _session_path(user_id: str) -> Path:
-    return SESSION_DIR / f"{user_id}.jsonl"
+# ──────────────────── 路径工具 ────────────────────
 
+def _user_dir(user_id: str) -> Path:
+    """获取用户的数据目录（admin → data/admin, 普通用户 → data/private/<uid>）"""
+    if ADMIN_NUMBER and user_id == str(ADMIN_NUMBER):
+        return ADMIN_DIR
+    d = PRIVATE_DIR / user_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _session_path(user_id: str) -> Path:
+    return _user_dir(user_id) / "history.jsonl"
+
+
+def _config_path(user_id: str) -> Path:
+    return _user_dir(user_id) / "config.json"
+
+
+def _load_config(user_id: str) -> dict:
+    path = _config_path(user_id)
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _save_config(user_id: str, cfg: dict) -> None:
+    path = _config_path(user_id)
+    path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_config(user_id: str) -> dict:
+    """获取用户配置（供外部读取）"""
+    return _load_config(user_id)
+
+
+# ──────────────────── JSONL 会话持久化 ────────────────────
 
 def load_history(user_id: str) -> list[dict]:
     """从 JSONL 文件加载对话历史"""
@@ -83,10 +122,16 @@ def load_history(user_id: str) -> list[dict]:
 
 
 def append_message(user_id: str, message: dict) -> None:
-    """追加一条消息到 JSONL 文件"""
+    """追加一条消息到 JSONL 文件（自动添加时间戳 + 更新 config）"""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    message = {**message, "timestamp": now}
     path = _session_path(user_id)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(message, ensure_ascii=False) + "\n")
+    # 更新 last_message_at
+    cfg = _load_config(user_id)
+    cfg["last_message_at"] = now
+    _save_config(user_id, cfg)
 
 
 def clear_history(user_id: str) -> None:
@@ -94,6 +139,20 @@ def clear_history(user_id: str) -> None:
     path = _session_path(user_id)
     if path.exists():
         path.unlink()
+
+
+# ──────────────────── 消息格式转换 ────────────────────
+
+def prepare_for_llm(messages: list[dict]) -> list[dict]:
+    """将存储格式的消息转换为 LLM API 格式：去掉 timestamp 字段，前缀到 content。"""
+    result = []
+    for msg in messages:
+        out = {k: v for k, v in msg.items() if k != "timestamp"}
+        ts = msg.get("timestamp", "")
+        if ts and out.get("content") and out.get("role") in ("user", "assistant"):
+            out["content"] = f"[{ts}] {out['content']}"
+        result.append(out)
+    return result
 
 
 # ──────────────────── 历史截断 ────────────────────
@@ -119,7 +178,10 @@ reset = on_fullmatch("/reset", priority=10, block=True)
 
 @reset.handle()
 async def handle_reset(event: PrivateMessageEvent):
-    clear_history(str(event.user_id))
+    user_id = str(event.user_id)
+    clear_history(user_id)
+    if user_id == str(ADMIN_NUMBER):
+        cancel_idle_timer()
     await reset.finish("对话历史已清除。")
 
 
@@ -175,7 +237,7 @@ async def handle_chat(event: PrivateMessageEvent):
 
     # 组装 messages（Admin 使用专属人格）
     prompt = ADMIN_PROMPT if (ADMIN_NUMBER and user_id == str(ADMIN_NUMBER) and ADMIN_PROMPT) else SYSTEM_PROMPT
-    messages = [{"role": "system", "content": prompt}] + trimmed
+    messages = [{"role": "system", "content": prompt}] + prepare_for_llm(trimmed)
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -224,6 +286,9 @@ async def handle_chat(event: PrivateMessageEvent):
                         bot = get_bot()
                         chunks = chunk_text(reply)
                         await send_chunked(bot, event, chunks, reply_first=False)
+                        # Admin 私聊回复后启动主动发言计时器
+                        if user_id == str(ADMIN_NUMBER):
+                            reset_idle_timer()
                     return
 
                 # 处理工具调用
@@ -255,6 +320,8 @@ async def handle_chat(event: PrivateMessageEvent):
             append_message(user_id, {"role": "assistant", "content": reply})
             bot = get_bot()
             await send_chunked(bot, event, [reply], reply_first=False)
+            if user_id == str(ADMIN_NUMBER):
+                reset_idle_timer()
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await chat.finish(f"API 请求失败 ({e.response.status_code})")

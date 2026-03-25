@@ -4,4 +4,6 @@ __pycache__/
 vendor/
 reference/
 data/sessions
+data/admin
+data/private
 data/reminders.json

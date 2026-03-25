@@ -109,3 +109,15 @@ def in_whitelist(group_id: int) -> bool:
     if not GROUP_WHITELIST:
         return False
     return str(group_id) in GROUP_WHITELIST
+
+
+def prepare_for_llm(messages: list[dict]) -> list[dict]:
+    """将存储格式的消息转换为 LLM API 格式：去掉 timestamp 字段，前缀到 content。"""
+    result = []
+    for msg in messages:
+        out = {k: v for k, v in msg.items() if k != "timestamp"}
+        ts = msg.get("timestamp", "")
+        if ts and out.get("content") and out.get("role") in ("user", "assistant"):
+            out["content"] = f"[{ts}] {out['content']}"
+        result.append(out)
+    return result

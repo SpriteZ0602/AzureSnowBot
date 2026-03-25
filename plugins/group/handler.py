@@ -30,6 +30,7 @@ from ..llm import API_KEY as OPENAI_API_KEY, BASE_URL as OPENAI_BASE_URL, MODEL 
 from .utils import (
     in_whitelist, is_at_bot, extract_text,
     get_reply_id, fetch_quoted_text, trim_history,
+    prepare_for_llm,
 )
 from ..chunker import chunk_text, send_chunked
 
@@ -101,7 +102,7 @@ async def handle_group_chat(event: GroupMessageEvent):
     history = load_history(group_id, active_persona)
     trimmed = trim_history(history, system_prompt)
 
-    messages = [{"role": "system", "content": system_prompt}] + trimmed
+    messages = [{"role": "system", "content": system_prompt}] + prepare_for_llm(trimmed)
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",

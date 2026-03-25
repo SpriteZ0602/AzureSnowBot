@@ -24,6 +24,9 @@ from nonebot.log import logger
 
 from ..chunker import send_chunked_raw
 
+# Admin QQ 号，用于判断提醒触发后是否重置主动发言计时器
+_admin_number: str = ""
+
 # ──────────────────── 持久化路径 ────────────────────
 REMINDERS_FILE = Path("data/reminders.json")
 REMINDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -112,7 +115,9 @@ async def _generate_reminder_message(job: ReminderJob) -> str:
         messages = [{"role": "system", "content": system_prompt}]
 
         # 取最近的聊天记录（避免超长）
-        for m in history[-20:]:
+        from ..chat.handler import prepare_for_llm
+        recent = prepare_for_llm(history[-20:])
+        for m in recent:
             role = m.get("role", "")
             content = m.get("content", "")
             if role in ("user", "assistant") and content:
@@ -198,6 +203,17 @@ def _append_to_history(job: ReminderJob, text: str) -> None:
         logger.warning(f"提醒写入聊天历史失败 [{job.id}]: {e}")
 
 
+def _reset_proactive_if_admin(job: ReminderJob) -> None:
+    """如果提醒是发给 admin 私聊的，重置主动发言计时器防止时间重叠。"""
+    global _admin_number
+    if not _admin_number:
+        from nonebot import get_driver
+        _admin_number = str(getattr(get_driver().config, "admin_number", ""))
+    if job.chat_type == "private" and _admin_number and job.target_id == _admin_number:
+        from ..chat.proactive import reset_idle_timer
+        reset_idle_timer()
+
+
 # ──────────────────── 触发逻辑 ────────────────────
 
 async def _fire(job: ReminderJob) -> None:
@@ -229,6 +245,9 @@ async def _fire(job: ReminderJob) -> None:
 
         # 写入聊天历史
         _append_to_history(job, text)
+
+        # Admin 私聊提醒触发后重置主动发言计时器，防止时间重叠
+        _reset_proactive_if_admin(job)
 
         logger.info(f"提醒已触发: [{job.id}] {job.message}")
     except Exception as e:
@@ -262,6 +281,9 @@ async def _fire_daily(job: ReminderJob) -> None:
 
             # 写入聊天历史
             _append_to_history(job, text)
+
+            # Admin 私聊提醒触发后重置主动发言计时器，防止时间重叠
+            _reset_proactive_if_admin(job)
 
             logger.info(f"每日提醒已触发: [{job.id}] {job.daily_time} | {job.message}")
         except Exception as e:

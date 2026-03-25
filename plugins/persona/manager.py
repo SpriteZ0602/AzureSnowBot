@@ -16,6 +16,7 @@ Persona 管理模块
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 from nonebot.log import logger
 
@@ -126,8 +127,30 @@ def _group_dir(group_id: str) -> Path:
     return d
 
 
-def _active_path(group_id: str) -> Path:
-    return _group_dir(group_id) / "_active.json"
+def _config_path(group_id: str) -> Path:
+    return _group_dir(group_id) / "config.json"
+
+
+def _load_group_config(group_id: str) -> dict:
+    """读取群组配置"""
+    path = _config_path(group_id)
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _save_group_config(group_id: str, config: dict) -> None:
+    """写入群组配置"""
+    path = _config_path(group_id)
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_group_config(group_id: str) -> dict:
+    """获取群组完整配置（供外部读取）"""
+    return _load_group_config(group_id)
 
 
 def _session_path(group_id: str, persona_name: str) -> Path:
@@ -136,23 +159,15 @@ def _session_path(group_id: str, persona_name: str) -> Path:
 
 def get_active_persona(group_id: str) -> str:
     """获取该群当前激活的人格名称"""
-    path = _active_path(group_id)
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return data.get("persona", DEFAULT_PERSONA)
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return DEFAULT_PERSONA
+    config = _load_group_config(group_id)
+    return config.get("active_persona", DEFAULT_PERSONA)
 
 
 def set_active_persona(group_id: str, persona_name: str) -> None:
     """设置该群激活的人格"""
-    path = _active_path(group_id)
-    path.write_text(
-        json.dumps({"persona": persona_name}, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    config = _load_group_config(group_id)
+    config["active_persona"] = persona_name
+    _save_group_config(group_id, config)
 
 
 # ──────────────────── 会话持久化（按 persona 隔离） ────────────────────
@@ -176,12 +191,18 @@ def load_history(group_id: str, persona_name: str | None = None) -> list[dict]:
 
 
 def append_message(group_id: str, message: dict, persona_name: str | None = None) -> None:
-    """追加消息到指定群 + 人格的历史"""
+    """追加消息到指定群 + 人格的历史（自动添加时间戳 + 更新 config）"""
     if persona_name is None:
         persona_name = get_active_persona(group_id)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    message = {**message, "timestamp": now}
     path = _session_path(group_id, persona_name)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(message, ensure_ascii=False) + "\n")
+    # 更新 last_message_at
+    config = _load_group_config(group_id)
+    config["last_message_at"] = now
+    _save_group_config(group_id, config)
 
 
 def clear_history(group_id: str, persona_name: str | None = None) -> None:
