@@ -99,6 +99,16 @@
 - **持久化**：`data/reminders.json`，Bot 重启不丢失
 - 支持查看和取消已设置的提醒
 
+### 群聊全量记录
+
+旁路记录白名单群内所有消息（不仅限 @Bot），供后续工具按需检索：
+
+- 存储位置：`data/sessions/groups/<gid>/_chatlog.jsonl`
+- 每行格式：`{"ts": 1711000000, "uid": "123", "name": "昵称", "text": "消息内容"}`
+- 自动清理超过 7 天的旧记录
+- 支持按时间、发送者、关键词过滤查询
+- 不会传入 LLM 的普通请求，仅在工具调用时按需加载
+
 ### Skill 技能系统（渐进式披露）
 
 借鉴 [OpenClaw AgentSkills](https://github.com/nicepkg/openclaw) 的设计理念，三层加载体系，最大限度节省上下文窗口：
@@ -133,6 +143,7 @@ data/skills/<skill-name>/
 AzureSnowBot/
 ├── main.py                        # Bot 入口
 ├── pyproject.toml                 # 项目配置
+├── pytest.ini                     # pytest 配置
 ├── .env                           # 运行时环境变量（不提交）
 ├── plugins/                       # NoneBot2 插件目录
 │   ├── __init__.py
@@ -143,6 +154,7 @@ AzureSnowBot/
 │   │   └── handler.py
 │   ├── group/                     #   群聊对话
 │   │   ├── handler.py             #     消息处理 + Agentic Loop
+│   │   ├── chatlog.py             #     全量群聊记录（旁路存储）
 │   │   ├── commands.py            #     /reset, /help
 │   │   └── utils.py               #     白名单、工具函数
 │   ├── persona/                   #   人格管理
@@ -180,7 +192,15 @@ AzureSnowBot/
 │           └── <group_id>/
 │               ├── _active.json   #   当前激活人格
 │               ├── <persona>.jsonl #  对话历史（按人格隔离）
+│               ├── _chatlog.jsonl  #  全量群聊记录
 │               └── personas/      #   群私有人格
+├── tests/                         # 单元测试
+│   ├── test_calculate.py
+│   ├── test_chatlog.py
+│   ├── test_chunker.py
+│   ├── test_persona.py
+│   ├── test_scheduler.py
+│   └── test_skill.py
 └── vendor/
     └── NapCat.Shell/              # NapCat 运行时
 ```
