@@ -124,7 +124,7 @@ data/skills/<skill-name>/
 
 - **NapCat** — 基于 NTQQ 的无头 Bot 框架，提供 OneBot 11 协议支持
 - **NoneBot2** — Python 异步 Bot 框架，负责消息处理与插件管理
-- **Gemini API** — 通过 OpenAI 兼容接口调用（默认模型 `gemini-3-flash-preview`）
+- **LLM 多服务商支持** — Gemini / OpenAI / Qwen 三选一，通过 `.env` 一键切换
 - **MCP SDK** — Model Context Protocol 客户端，连接外部工具服务器
 
 ## 项目结构
@@ -136,6 +136,7 @@ AzureSnowBot/
 ├── .env                           # 运行时环境变量（不提交）
 ├── plugins/                       # NoneBot2 插件目录
 │   ├── __init__.py
+│   ├── llm.py                     #   LLM 统一配置（多 Provider 切换）
 │   ├── ping.py                    #   存活检测
 │   ├── chunker.py                 #   消息分条发送 + 人类节奏模拟
 │   ├── chat/                      #   私聊对话
@@ -212,18 +213,38 @@ npx playwright install chromium
 ```env
 HOST=127.0.0.1
 PORT=8082
+
+# LLM Provider 切换：gemini / openai / qwen
+LLM_PROVIDER=gemini
+
+# （可选）覆盖默认模型和接口地址:
+# LLM_MODEL=gemini-2.5-flash-preview-05-20
+# LLM_BASE_URL=
+
+# API Keys（只需填写当前 provider 对应的即可）
 gemini_api_key=AIzaSyXXXXXXXXXXXXX
-gemini_base_url=https://generativelanguage.googleapis.com/v1beta/openai
-gemini_model=gemini-3-flash-preview
+# openai_api_key=sk-XXXX
+# qwen_api_key=sk-XXXX
+
 GROUP_WHITELIST=["群号1", "群号2"]
 ADMIN_NUMBER=你的QQ号
 ```
 
+支持三家 LLM 服务商，均通过 OpenAI 兼容接口调用：
+
+| Provider | 默认模型 | 默认 Base URL | 所需 Key 变量 |
+|----------|----------|-------------|------------|
+| `gemini` | `gemini-2.5-flash-preview-05-20` | `generativelanguage.googleapis.com/v1beta/openai` | `gemini_api_key` |
+| `openai` | `gpt-4o` | `api.openai.com/v1` | `openai_api_key` |
+| `qwen` | `qwen-plus` | `dashscope.aliyuncs.com/compatible-mode/v1` | `qwen_api_key` |
+
+其他配置项：
+
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `gemini_api_key` | Gemini API 密钥 | （必填） |
-| `gemini_base_url` | Gemini API 基地址（OpenAI 兼容） | `https://generativelanguage.googleapis.com/v1beta/openai` |
-| `gemini_model` | 模型名称 | `gemini-3-flash-preview` |
+| `LLM_PROVIDER` | LLM 服务商 | `gemini` |
+| `LLM_MODEL` | （可选）覆盖默认模型名称 | 按 provider 自动选择 |
+| `LLM_BASE_URL` | （可选）覆盖默认接口地址 | 按 provider 自动选择 |
 | `GROUP_WHITELIST` | 允许使用的群号列表（JSON 数组） | `[]`（空 = 不响应任何群） |
 | `ADMIN_NUMBER` | 管理员 QQ 号，该用户私聊时读取专属人格 | 空 |
 

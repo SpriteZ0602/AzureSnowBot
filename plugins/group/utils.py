@@ -5,7 +5,6 @@
 """
 
 import json
-import os
 
 from nonebot import get_driver
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Bot
@@ -13,10 +12,6 @@ from nonebot.log import logger
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
-OPENAI_API_KEY: str = getattr(config, "gemini_api_key", "") or os.environ.get("GEMINI_API_KEY", "")
-OPENAI_BASE_URL: str = getattr(config, "gemini_base_url", "") or os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
-OPENAI_MODEL: str = getattr(config, "gemini_model", "") or os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
-LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "openai")
 
 # 群聊白名单
 _raw_whitelist = getattr(config, "group_whitelist", [])

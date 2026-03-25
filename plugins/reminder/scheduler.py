@@ -13,14 +13,13 @@
 
 import json
 import asyncio
-import os
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 
 import httpx
-from nonebot import get_bot, get_driver
+from nonebot import get_bot
 from nonebot.log import logger
 
 from ..chunker import send_chunked_raw
@@ -34,14 +33,14 @@ _llm_config: dict | None = None
 
 
 def _get_llm_config() -> dict:
-    """延迟获取 LLM 配置，避免模块导入时 get_driver 未就绪"""
+    """延迟获取 LLM 配置，统一从 plugins.llm 读取"""
     global _llm_config
     if _llm_config is None:
-        config = get_driver().config
+        from ..llm import API_KEY, BASE_URL, MODEL
         _llm_config = {
-            "api_key": getattr(config, "gemini_api_key", "") or os.environ.get("GEMINI_API_KEY", ""),
-            "base_url": getattr(config, "gemini_base_url", "") or os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
-            "model": getattr(config, "gemini_model", "") or os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
+            "api_key": API_KEY,
+            "base_url": BASE_URL,
+            "model": MODEL,
         }
     return _llm_config
 
@@ -284,6 +283,44 @@ def _next_daily_fire(time_str: str) -> datetime:
 
 # ──────────────────── 公开 API ────────────────────
 
+# ──────────────────── 去重窗口（秒） ────────────────────
+_DEDUP_WINDOW = 120  # 同一会话 + 同一事项，120 秒内视为重复
+
+
+def _find_duplicate_oneshot(
+    chat_type: str, target_id: str, message: str,
+) -> ReminderJob | None:
+    """检查是否已存在相同的一次性提醒（同会话 + 同事项 + 近期创建）。"""
+    now = datetime.now()
+    for job in _jobs.values():
+        if (
+            job.chat_type == chat_type
+            and job.target_id == target_id
+            and job.message == message
+            and job.recurring == ""
+        ):
+            created = datetime.fromisoformat(job.created_at)
+            if (now - created).total_seconds() < _DEDUP_WINDOW:
+                return job
+    return None
+
+
+def _find_duplicate_daily(
+    chat_type: str, target_id: str, message: str, daily_time: str,
+) -> ReminderJob | None:
+    """检查是否已存在完全相同的每日提醒（同会话 + 同事项 + 同时刻）。"""
+    for job in _jobs.values():
+        if (
+            job.chat_type == chat_type
+            and job.target_id == target_id
+            and job.message == message
+            and job.recurring == "daily"
+            and job.daily_time == daily_time
+        ):
+            return job
+    return None
+
+
 def add_reminder(
     chat_type: str,
     target_id: str,
@@ -296,7 +333,15 @@ def add_reminder(
     添加一条一次性提醒。
 
     返回 (job_id, 触发时间字符串)。
+    若检测到重复，直接返回已存在的提醒 ID 和「已存在」标记。
     """
+    # ── 防重：同会话 + 同事项 + 近期创建 ──
+    dup = _find_duplicate_oneshot(chat_type, target_id, message)
+    if dup:
+        fire_str = datetime.fromisoformat(dup.fire_at).strftime("%H:%M:%S")
+        logger.warning(f"提醒去重: [{dup.id}] 已存在相同一次性提醒「{message}」")
+        return dup.id, fire_str
+
     job_id = uuid.uuid4().hex[:8]
     now = datetime.now()
     fire_at = now + timedelta(minutes=delay_minutes)
@@ -338,6 +383,13 @@ def add_daily_reminder(
 
     返回 (job_id, 下次触发时间字符串)。
     """
+    # ── 防重：同会话 + 同事项 + 同时刻 ──
+    dup = _find_duplicate_daily(chat_type, target_id, message, daily_time)
+    if dup:
+        fire_str = datetime.fromisoformat(dup.fire_at).strftime("%m-%d %H:%M")
+        logger.warning(f"提醒去重: [{dup.id}] 已存在相同每日提醒「{message}」@ {daily_time}")
+        return dup.id, fire_str
+
     job_id = uuid.uuid4().hex[:8]
     now = datetime.now()
     next_fire = _next_daily_fire(daily_time)

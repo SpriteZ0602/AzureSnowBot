@@ -5,7 +5,6 @@
 """
 
 import json
-import os
 from pathlib import Path
 
 import httpx
@@ -22,10 +21,7 @@ from ..local_tools.manager import (
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
-OPENAI_API_KEY: str = getattr(config, "gemini_api_key", "") or os.environ.get("GEMINI_API_KEY", "")
-OPENAI_BASE_URL: str = getattr(config, "gemini_base_url", "") or os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
-OPENAI_MODEL: str = getattr(config, "gemini_model", "") or os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
-LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "openai")
+from ..llm import API_KEY as OPENAI_API_KEY, BASE_URL as OPENAI_BASE_URL, MODEL as OPENAI_MODEL
 ADMIN_NUMBER: str = getattr(config, "admin_number", "373900859")
 
 # 加载公共基底提示词

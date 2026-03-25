@@ -26,8 +26,8 @@ from ..local_tools.manager import (
     get_openai_tools as local_openai_tools,
     handle_tool_call as local_handle_tool_call,
 )
+from ..llm import API_KEY as OPENAI_API_KEY, BASE_URL as OPENAI_BASE_URL, MODEL as OPENAI_MODEL
 from .utils import (
-    OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, LLM_PROVIDER,
     in_whitelist, is_at_bot, extract_text,
     get_reply_id, fetch_quoted_text, trim_history,
 )
