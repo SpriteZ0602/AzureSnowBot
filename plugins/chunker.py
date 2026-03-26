@@ -23,8 +23,8 @@ MIN_CHUNK_CHARS = 10    # 太短的片段会和下一段合并
 MAX_CHUNK_CHARS = 200   # 超过此长度的段落会按句子再拆
 
 # 人类节奏：每条消息之间的随机延迟（秒）
-HUMAN_DELAY_MIN = 3.0
-HUMAN_DELAY_MAX = 5.0
+HUMAN_DELAY_MIN = 1.0
+HUMAN_DELAY_MAX = 3.0
 
 # 句子结束符（中文 + 英文）
 _SENTENCE_END_RE = re.compile(r"(?<=[。！？!?\n])")
@@ -51,10 +51,6 @@ def chunk_text(text: str) -> list[str]:
     text = text.strip()
     if not text:
         return []
-
-    # 短回复不拆
-    if len(text) <= CHUNK_THRESHOLD:
-        return [text]
 
     chunks: list[str] = []
 
