@@ -60,23 +60,12 @@ _mock_llm.BASE_URL = "https://test.example.com"
 _mock_llm.MODEL = "test-model"
 sys.modules["plugins.llm"] = _mock_llm
 
-# ── 实际的 prepare_for_llm 实现（测试中需要真实转换）──
-def _real_prepare_for_llm(messages):
-    result = []
-    for msg in messages:
-        out = {k: v for k, v in msg.items() if k != "timestamp"}
-        ts = msg.get("timestamp", "")
-        if ts and out.get("content") and out.get("role") in ("user", "assistant"):
-            out["content"] = f"[{ts}] {out['content']}"
-        result.append(out)
-    return result
-
 # ── 预设 handler mock（防止 proactive.py 延迟导入时加载真实 handler.py）──
 _default_handler_mock = MagicMock()
 _default_handler_mock.load_history = MagicMock(return_value=[])
 _default_handler_mock.trim_history = MagicMock(side_effect=lambda msgs: msgs[-20:])
 _default_handler_mock.append_message = MagicMock()
-_default_handler_mock.prepare_for_llm = MagicMock(side_effect=_real_prepare_for_llm)
+_default_handler_mock.build_time_context = MagicMock(return_value="\n当前时间: 2026-03-26 12:00:00（星期四）")
 _default_handler_mock.ADMIN_PROMPT = ""
 _default_handler_mock.SYSTEM_PROMPT = "你是助手"
 sys.modules["plugins.chat.handler"] = _default_handler_mock
@@ -139,7 +128,7 @@ def _setup_handler_mock(tmp_dir: Path, messages: list[dict],
     mock_handler.load_history = MagicMock(side_effect=load_history)
     mock_handler.trim_history = MagicMock(side_effect=trim_history)
     mock_handler.append_message = MagicMock()
-    mock_handler.prepare_for_llm = MagicMock(side_effect=_real_prepare_for_llm)
+    mock_handler.build_time_context = MagicMock(return_value="\n当前时间: 2026-03-26 12:00:00（星期四）")
     mock_handler.ADMIN_PROMPT = admin_prompt
     mock_handler.SYSTEM_PROMPT = system_prompt
     sys.modules["plugins.chat.handler"] = mock_handler
@@ -302,7 +291,7 @@ class TestProactiveDecision:
         payload = call_args.kwargs.get("json") or call_args[1].get("json")
         system_msg = payload["messages"][0]
         assert system_msg["role"] == "system"
-        assert system_msg["content"] == "你是東雲絵名"
+        assert system_msg["content"].startswith("你是東雲絵名")
 
     @pytest.mark.asyncio
     async def test_proactive_instruction_appended(self, tmp_session_dir):

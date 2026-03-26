@@ -31,9 +31,6 @@ _SENTENCE_END_RE = re.compile(r"(?<=[。！？!?\n])")
 # 段落分隔符
 _PARAGRAPH_RE = re.compile(r"\n{2,}")
 
-# LLM 可能在回复开头加的时间戳，如 [2026-03-25 16:55:46]
-_LEADING_TIMESTAMP_RE = re.compile(r"^\s*\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\]\s*")
-
 
 # ──────────────────── 文本拆分 ────────────────────
 
@@ -54,9 +51,6 @@ def chunk_text(text: str) -> list[str]:
     text = text.strip()
     if not text:
         return []
-
-    # 去掉 LLM 可能添加的开头时间戳
-    text = _LEADING_TIMESTAMP_RE.sub("", text)
 
     # 短回复不拆
     if len(text) <= CHUNK_THRESHOLD:

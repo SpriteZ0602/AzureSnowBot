@@ -33,11 +33,11 @@
 - **Admin 私聊**: `data/admin/history.jsonl`，人格在 `data/admin/admin_persona.txt`，配置在 `data/admin/config.json`。
 - **普通私聊**: `data/private/<uid>/history.jsonl`，配置在 `data/private/<uid>/config.json`。
 - **群聊**: `data/sessions/groups/<gid>/<persona>.jsonl`，按人格隔离。配置在 `data/sessions/groups/<gid>/config.json`（含 `active_persona` + `last_message_at`）。
-- **消息格式**: `{"role": "user", "content": "你好", "timestamp": "2026-03-25 12:00:00"}`，`timestamp` 由 `append_message()` 自动添加。
-- **LLM 发送时**: `prepare_for_llm()` 会去掉 `timestamp` 字段并前缀到 `content`，如 `"[2026-03-25 12:00:00] 你好"`，让 LLM 感知时间上下文。
-- **config.json**: 每次 `append_message()` 同时更新 `last_message_at` 字段，用于主动发言等功能判断上次对话时间。
-- 私聊由 `plugins/chat/handler.py` 管理 `load_history` / `append_message` / `trim_history` / `prepare_for_llm`。
-- 群聊由 `plugins/persona/manager.py` 管理 `load_history` / `append_message`，`plugins/group/utils.py` 提供 `trim_history` / `prepare_for_llm`。
+- **消息格式**: `{"role": "user", "content": "你好"}`，纯净的 role/content 格式，不嵌入时间戳。
+- **时间上下文**: 每次组装 LLM 请求时，在 system prompt 末尾追加当前时间和上次对话时间（从 `config.json` 的 `last_message_at` 读取），如 `"\n当前时间: 2026-03-26 14:30:00（星期四），上次对话: 2026-03-26 12:00:00"`。这样 LLM 能感知时间但不会在回复中复述时间戳。
+- **config.json**: 每次 `append_message()` 同时更新 `last_message_at` 字段，用于时间上下文和主动发言功能。
+- 私聊由 `plugins/chat/handler.py` 管理 `load_history` / `append_message` / `trim_history` / `build_time_context`。
+- 群聊由 `plugins/persona/manager.py` 管理 `load_history` / `append_message`，`plugins/group/utils.py` 提供 `trim_history`。
 - **两套接口不同**，私聊是 `load_history(uid)`，群聊是 `load_history(gid, persona_name)`。这是已知的架构分裂，未来如果统一需要做 adapter 层。
 
 ### 数据目录结构
@@ -72,8 +72,6 @@ data/
 `plugins/chunker.py` 提供两个发送函数：
 - `send_chunked(bot, event, chunks)` — 需要 event 对象，用于普通回复
 - `send_chunked_raw(bot, chat_type, target_id, text)` — 不需要 event，用于主动推送（提醒 / 主动发言）
-
-`chunk_text()` 入口会自动去掉 LLM 回复开头的时间戳（`[2026-03-25 16:55:46]` 格式），防止泄漏给用户。所有发送路径都经过此函数，一处清理全局生效。
 
 ## 目录结构速查
 
@@ -141,7 +139,7 @@ spec.loader.exec_module(mod)
 - **中文引号**: Python 字符串中不能嵌套相同引号。`"总结小明的发言"` 在 `"..."` 内会 SyntaxError，改用 `'总结小明的发言'`。
 - **`asyncio.Task.cancelled()`**: 调用 `task.cancel()` 后需要 `await asyncio.sleep(0)` 才能让 task 真正进入 cancelled 状态，否则 `task.cancelled()` 还是 False。
 - **NoneBot `.env` 整数解析**: `.env` 中纯数字值（如 `ADMIN_NUMBER=373900859`）会被 NoneBot 解析为 `int` 而非 `str`。读取时必须 `str(getattr(config, "admin_number", ""))`，否则 `Path / int` 会 TypeError。
-- **LLM 回复时间戳**: 即使 prompt 里说了不要加时间戳，LLM 仍可能在回复开头加 `[2026-03-25 16:55:46]`。`chunker.py` 的 `chunk_text()` 会用正则自动去掉，`_base.txt` 里也有提示约束。
+- **LLM 回复时间戳**: 即使 prompt 里说了不要加时间戳，LLM 仍可能在回复开头加 `[2026-03-25 16:55:46]`。`_base.txt` 里有提示约束，但不能完全保证。
 
 ## 待实现功能 & 重构路线
 
@@ -242,8 +240,8 @@ Roadmap 中已列出。需要：
 - 工具函数签名统一 `async def tool_fn(param=default, **kwargs) -> str`，`kwargs` 中有 handler 注入的上下文（`_chat_type`, `_target_id`, `_user_id`, `_sender_name`）
 - 环境变量在 `.env` 中定义，通过 `get_driver().config` 访问（NoneBot2 会自动加载 `.env`）
 - 路径用 `pathlib.Path`，不用字符串拼接
-- 对话历史格式：JSONL，每行 `{"role": "...", "content": "...", "timestamp": "2026-03-25 12:00:00"}`
-- 旧消息可能没有 `timestamp` 字段，代码处理时要兑容缺失情况
+- 对话历史格式：JSONL，每行 `{"role": "...", "content": "..."}`
+- 时间上下文通过 system prompt 末尾动态注入，不存储在消息中
 
 ## 常用操作
 

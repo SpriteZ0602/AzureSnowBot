@@ -115,8 +115,7 @@ async def _generate_reminder_message(job: ReminderJob) -> str:
         messages = [{"role": "system", "content": system_prompt}]
 
         # 取最近的聊天记录（避免超长）
-        from ..chat.handler import prepare_for_llm
-        recent = prepare_for_llm(history[-20:])
+        recent = history[-20:]
         for m in recent:
             role = m.get("role", "")
             content = m.get("content", "")

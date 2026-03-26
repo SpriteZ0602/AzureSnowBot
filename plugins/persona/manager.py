@@ -191,11 +191,10 @@ def load_history(group_id: str, persona_name: str | None = None) -> list[dict]:
 
 
 def append_message(group_id: str, message: dict, persona_name: str | None = None) -> None:
-    """追加消息到指定群 + 人格的历史（自动添加时间戳 + 更新 config）"""
+    """追加消息到指定群 + 人格的历史（更新 config）"""
     if persona_name is None:
         persona_name = get_active_persona(group_id)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    message = {**message, "timestamp": now}
     path = _session_path(group_id, persona_name)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(message, ensure_ascii=False) + "\n")

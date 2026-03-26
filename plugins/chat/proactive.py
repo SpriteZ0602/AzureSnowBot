@@ -10,7 +10,6 @@ Admin 私聊主动发言
 
 import asyncio
 import json
-from datetime import datetime
 
 import httpx
 from nonebot import get_bot, get_driver
@@ -26,9 +25,8 @@ IDLE_SECONDS: int = int(getattr(config, "proactive_idle_seconds", 3600))
 
 # 引导词 —— 触发时动态生成，带当前时间
 def _build_proactive_instruction() -> str:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
-        f"现在是 {now}，距离你们上次对话已经过去了一段时间。"
+        "距离你们上次对话已经过去了一段时间。"
         "如果你觉得有什么想对TA说的（比如继续之前的话题、分享感想、吐槽、找话聊等），"
         "就直接说，我会把你的回复原样发送出去。"
         "如果没什么想说的，只回复 NO（仅这两个字母，不要加任何其他内容）。"
@@ -64,6 +62,8 @@ async def _idle_countdown() -> None:
     try:
         await asyncio.sleep(IDLE_SECONDS)
         await _try_proactive_message()
+        # 无论 LLM 是否选择发送，都重新启动计时器
+        reset_idle_timer()
     except asyncio.CancelledError:
         pass
     except Exception as e:
@@ -77,7 +77,7 @@ async def _try_proactive_message() -> None:
         load_history,
         trim_history,
         append_message,
-        prepare_for_llm,
+        build_time_context,
         ADMIN_PROMPT,
         SYSTEM_PROMPT,
     )
@@ -95,8 +95,9 @@ async def _try_proactive_message() -> None:
 
     trimmed = trim_history(history)
     prompt = ADMIN_PROMPT if ADMIN_PROMPT else SYSTEM_PROMPT
+    prompt += build_time_context(ADMIN_NUMBER)
 
-    messages = [{"role": "system", "content": prompt}] + prepare_for_llm(trimmed)
+    messages = [{"role": "system", "content": prompt}] + trimmed
     # 把引导词作为独立 system 消息追加在末尾
     messages.append({"role": "system", "content": _build_proactive_instruction()})
 
@@ -133,9 +134,6 @@ async def _try_proactive_message() -> None:
         bot = get_bot()
         await send_chunked_raw(bot, "private", int(ADMIN_NUMBER), reply)
         logger.info(f"主动发言: 已发送 ({len(reply)} 字)")
-
-        # 注意：主动发言后不重置计时器，避免无限自言自语循环。
-        # 下次 admin 主动发消息并得到回复后，计时器才会重新启动。
 
     except Exception as e:
         logger.error(f"主动发言 LLM 调用失败: {e}")

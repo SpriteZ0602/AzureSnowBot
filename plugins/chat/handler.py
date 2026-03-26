@@ -122,9 +122,8 @@ def load_history(user_id: str) -> list[dict]:
 
 
 def append_message(user_id: str, message: dict) -> None:
-    """追加一条消息到 JSONL 文件（自动添加时间戳 + 更新 config）"""
+    """追加一条消息到 JSONL 文件（更新 config）"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    message = {**message, "timestamp": now}
     path = _session_path(user_id)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(message, ensure_ascii=False) + "\n")
@@ -141,18 +140,19 @@ def clear_history(user_id: str) -> None:
         path.unlink()
 
 
-# ──────────────────── 消息格式转换 ────────────────────
+# ──────────────────── 时间上下文 ────────────────────
 
-def prepare_for_llm(messages: list[dict]) -> list[dict]:
-    """将存储格式的消息转换为 LLM API 格式：去掉 timestamp 字段，前缀到 content。"""
-    result = []
-    for msg in messages:
-        out = {k: v for k, v in msg.items() if k != "timestamp"}
-        ts = msg.get("timestamp", "")
-        if ts and out.get("content") and out.get("role") in ("user", "assistant"):
-            out["content"] = f"[{ts}] {out['content']}"
-        result.append(out)
-    return result
+_WEEKDAYS = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+
+def build_time_context(user_id: str) -> str:
+    """生成时间上下文字符串，追加到 system prompt 末尾。"""
+    now = datetime.now()
+    now_str = f"{now.strftime('%Y-%m-%d %H:%M:%S')}（{_WEEKDAYS[now.weekday()]}）"
+    cfg = _load_config(user_id)
+    last = cfg.get("last_message_at", "")
+    if last:
+        return f"\n当前时间: {now_str}，上次对话: {last}"
+    return f"\n当前时间: {now_str}"
 
 
 # ──────────────────── 历史截断 ────────────────────
@@ -237,7 +237,8 @@ async def handle_chat(event: PrivateMessageEvent):
 
     # 组装 messages（Admin 使用专属人格）
     prompt = ADMIN_PROMPT if (ADMIN_NUMBER and user_id == str(ADMIN_NUMBER) and ADMIN_PROMPT) else SYSTEM_PROMPT
-    messages = [{"role": "system", "content": prompt}] + prepare_for_llm(trimmed)
+    prompt += build_time_context(user_id)
+    messages = [{"role": "system", "content": prompt}] + trimmed
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",

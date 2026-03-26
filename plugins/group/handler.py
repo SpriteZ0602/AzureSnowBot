@@ -5,6 +5,7 @@
 """
 
 import json
+from datetime import datetime
 
 import httpx
 from nonebot import on_message, get_bot
@@ -14,7 +15,7 @@ from nonebot.log import logger
 
 from ..persona.manager import (
     get_active_persona, load_persona_prompt,
-    load_history, append_message,
+    load_history, append_message, get_group_config,
 )
 from ..mcp.manager import get_openai_tools, call_tool, MAX_TOOL_ROUNDS
 from ..skill.manager import (
@@ -30,7 +31,6 @@ from ..llm import API_KEY as OPENAI_API_KEY, BASE_URL as OPENAI_BASE_URL, MODEL 
 from .utils import (
     in_whitelist, is_at_bot, extract_text,
     get_reply_id, fetch_quoted_text, trim_history,
-    prepare_for_llm,
 )
 from ..chunker import chunk_text, send_chunked
 
@@ -82,6 +82,15 @@ async def handle_group_chat(event: GroupMessageEvent):
     if skill_catalog:
         system_prompt += "\n" + skill_catalog
 
+    # 注入时间上下文
+    _weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    now = datetime.now()
+    now_str = f"{now.strftime('%Y-%m-%d %H:%M:%S')}（{_weekdays[now.weekday()]}）"
+    group_cfg = get_group_config(group_id)
+    last = group_cfg.get("last_message_at", "")
+    time_ctx = f"\n当前时间: {now_str}，上次对话: {last}" if last else f"\n当前时间: {now_str}"
+    system_prompt += time_ctx
+
     # 构建工具调用上下文（供需要环境信息的工具使用，如定时提醒）
     _tool_context = {
         "_chat_type": "group",
@@ -102,7 +111,7 @@ async def handle_group_chat(event: GroupMessageEvent):
     history = load_history(group_id, active_persona)
     trimmed = trim_history(history, system_prompt)
 
-    messages = [{"role": "system", "content": system_prompt}] + prepare_for_llm(trimmed)
+    messages = [{"role": "system", "content": system_prompt}] + trimmed
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
