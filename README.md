@@ -51,7 +51,7 @@ Admin 私聊每次请求动态从磁盘读取以下文件组装 system prompt（
 
 | 文件 | 用途 |
 |------|------|
-| `data/admin/admin_persona.md` | SOUL — 人格灵魂（角色设定） |
+| `data/admin/SOUL.md` | 人格灵魂（角色设定） |
 | `data/admin/AGENTS.md` | 操作手册 — 核心原则、记忆规则、工具使用指南 |
 | `data/admin/USER.md` | 用户档案 — Admin 的个人信息和偏好 |
 | `data/admin/MEMORY.md` | 长期记忆 — 跨会话事实/情感记录 |
@@ -214,7 +214,7 @@ AzureSnowBot/
 │   │   └── roaster.txt            #   毒舌
 │   ├── reminders.json             # 定时提醒持久化数据
 │   ├── admin/                     # 管理员私聊
-│   │   ├── admin_persona.md       #   人格 prompt (SOUL)
+│   │   ├── SOUL.md                #   人格灵魂（角色设定）
 │   │   ├── AGENTS.md              #   操作手册
 │   │   ├── USER.md                #   用户档案
 │   │   ├── MEMORY.md              #   长期记忆
@@ -306,7 +306,7 @@ ADMIN_NUMBER=你的QQ号
 
 ```
 data/admin/
-├── admin_persona.md    # 人格设定（必需）
+├── SOUL.md             # 人格设定（必需）
 ├── AGENTS.md           # 操作手册（可选）
 ├── USER.md             # 用户档案（可选）
 └── MEMORY.md           # 长期记忆（可选）

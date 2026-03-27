@@ -31,6 +31,7 @@ from ..skill.manager import (
     handle_tool_call as skill_handle_tool_call,
 )
 from .proactive import reset_idle_timer, cancel_idle_timer
+from .compaction import compact_history
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
@@ -43,7 +44,7 @@ ADMIN_DIR.mkdir(parents=True, exist_ok=True)
 
 # Admin 上下文文件列表（每次请求时动态读取）
 _ADMIN_CONTEXT_FILES = [
-    "admin_persona.md",    # SOUL — 人格灵魂
+    "SOUL.md",             # 人格灵魂（角色设定）
     "AGENTS.md",           # 操作手册
     "USER.md",             # 用户档案
     "MEMORY.md",           # 长期记忆
@@ -253,8 +254,15 @@ async def handle_chat(event: PrivateMessageEvent):
     user_msg = {"role": "user", "content": content}
     append_message(user_id, user_msg)
 
-    # 加载历史并截断
+    # 加载历史 → 压缩（如需要） → 截断
     history = load_history(user_id)
+
+    # Compaction: 如果历史 token 过多，压缩旧消息为摘要 + 提取记忆
+    memory_path = ADMIN_DIR / "MEMORY.md"
+    compacted = await compact_history(user_id, _session_path(user_id), memory_path)
+    if compacted:
+        history = load_history(user_id)  # 重新加载压缩后的历史
+
     trimmed = trim_history(history)
 
     # 组装 messages（动态上下文）

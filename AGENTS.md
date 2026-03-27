@@ -30,7 +30,7 @@
 `plugins/llm.py` 是唯一的 LLM 配置中心，导出 `API_KEY, BASE_URL, MODEL`。所有调用方 `from ..llm import ...`，**不要**在其他模块硬编码 API key 或 base URL。
 
 ### 对话历史
-- **Admin 私聊**: `data/admin/history.jsonl`，人格在 `data/admin/admin_persona.md`，配置在 `data/admin/config.json`。
+- **Admin 私聊**: `data/admin/history.jsonl`，人格在 `data/admin/SOUL.md`，配置在 `data/admin/config.json`。
 - **私聊仅限 Admin**：非 Admin 用户私聊会收到“请在群里跟我聊天哦~”提示。
 - **群聊**: `data/sessions/groups/<gid>/<persona>.jsonl`，按人格隔离。配置在 `data/sessions/groups/<gid>/config.json`（含 `active_persona` + `last_message_at`）。
 - **消息格式**: `{"role": "user", "content": "你好"}`，纯净的 role/content 格式，不嵌入时间戳。
@@ -46,7 +46,7 @@ Admin 私聊每次请求动态从磁盘读取以下文件组装 system prompt（
 
 | 文件 | 用途 |
 |------|------|
-| `admin_persona.md` | SOUL — 人格灵魂（角色设定） |
+| `SOUL.md` | 人格灵魂（角色设定） |
 | `AGENTS.md` | 操作手册 — 核心原则、记忆规则、工具使用指南 |
 | `USER.md` | 用户档案 — Admin 的个人信息和偏好 |
 | `MEMORY.md` | 长期记忆 — 跨会话事实/情感记录 |
@@ -63,7 +63,7 @@ Admin 私聊拥有完整工具链（与群聊一致）：
 ```
 data/
 ├── admin/                     # Admin 私聊专用
-│   ├── admin_persona.md       #   人格 prompt (SOUL)
+│   ├── SOUL.md                #   人格灵魂（角色设定）
 │   ├── AGENTS.md              #   操作手册
 │   ├── USER.md                #   用户档案
 │   ├── MEMORY.md              #   长期记忆
