@@ -68,6 +68,7 @@ class ReminderJob:
 # ──────────────────── 运行时状态 ────────────────────
 _jobs: dict[str, ReminderJob] = {}
 _tasks: dict[str, asyncio.Task] = {}
+_lock = asyncio.Lock()  # 保护 _jobs 和 _save() 的并发访问
 
 
 # ──────────────────── 持久化 ────────────────────
@@ -220,9 +221,10 @@ async def _fire(job: ReminderJob) -> None:
         await asyncio.sleep(delay)
 
     # 从运行时状态中移除
-    _jobs.pop(job.id, None)
-    _tasks.pop(job.id, None)
-    _save()
+    async with _lock:
+        _jobs.pop(job.id, None)
+        _tasks.pop(job.id, None)
+        _save()
 
     try:
         bot = get_bot()
@@ -264,8 +266,9 @@ async def _fire_daily(job: ReminderJob) -> None:
             break
 
         # 更新 fire_at 到当前触发时间（供 list 显示）
-        job.fire_at = fire_at.isoformat()
-        _save()
+        async with _lock:
+            job.fire_at = fire_at.isoformat()
+            _save()
 
         try:
             bot = get_bot()

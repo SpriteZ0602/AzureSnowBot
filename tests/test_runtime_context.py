@@ -57,16 +57,33 @@ if "plugins.llm" not in sys.modules:
     _llm_spec.loader.exec_module(_llm_mod)
 
 # ── 确保 local_tools 已加载（工具摘要测试需要注册表） ──
-if "plugins.local_tools" not in sys.modules:
-    _lt_pkg = types.ModuleType("plugins.local_tools")
-    _lt_pkg.__path__ = [str(ROOT / "plugins" / "local_tools")]
-    sys.modules["plugins.local_tools"] = _lt_pkg
+# 强制重载 manager（因为 test_proactive 可能已注入 mock）
+_lt_pkg = types.ModuleType("plugins.local_tools")
+_lt_pkg.__path__ = [str(ROOT / "plugins" / "local_tools")]
+sys.modules["plugins.local_tools"] = _lt_pkg
 
-if "plugins.local_tools.manager" not in sys.modules:
-    import plugins.local_tools.manager  # noqa
+_lt_mgr_spec = importlib.util.spec_from_file_location(
+    "plugins.local_tools.manager",
+    ROOT / "plugins" / "local_tools" / "manager.py",
+)
+_lt_mgr_mod = importlib.util.module_from_spec(_lt_mgr_spec)
+sys.modules["plugins.local_tools.manager"] = _lt_mgr_mod
+_lt_mgr_spec.loader.exec_module(_lt_mgr_mod)
 
-if "plugins.local_tools.tools" not in sys.modules:
-    import plugins.local_tools.tools  # noqa
+# tools.py 注册工具到 manager._registry。
+# 不能 force-reload（会破坏 test_file_tools 的 monkeypatch），
+# 所以用 exec_module 在已有模块上重新执行，让 @register_tool 写入新 _registry。
+_lt_tools_current = sys.modules.get("plugins.local_tools.tools")
+if _lt_tools_current and hasattr(_lt_tools_current, "__spec__") and _lt_tools_current.__spec__:
+    _lt_tools_current.__spec__.loader.exec_module(_lt_tools_current)
+else:
+    _lt_tools_spec = importlib.util.spec_from_file_location(
+        "plugins.local_tools.tools",
+        ROOT / "plugins" / "local_tools" / "tools.py",
+    )
+    _lt_tools_mod = importlib.util.module_from_spec(_lt_tools_spec)
+    sys.modules["plugins.local_tools.tools"] = _lt_tools_mod
+    _lt_tools_spec.loader.exec_module(_lt_tools_mod)
 
 # ── 加载 runtime_context 模块（强制替换，因为 test_proactive 可能已注入 mock） ──
 _rc_spec = importlib.util.spec_from_file_location(

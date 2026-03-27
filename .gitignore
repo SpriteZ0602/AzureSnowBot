@@ -4,6 +4,7 @@ __pycache__/
 vendor/
 reference/
 data/sessions
-data/admin
-data/private
+data/admin/config.json
+data/admin/history.jsonl
+data/admin/SOUL.md
 data/reminders.json

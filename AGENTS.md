@@ -1,7 +1,7 @@
 # AGENTS.md — AzureSnowBot 开发指南
 
 > 本文件供 AI 编码工具（Copilot / Claude / Cursor 等）在新会话中快速理解项目。
-> 最后更新: 2026-03-25
+> 最后更新: 2026-03-27
 
 ---
 
@@ -9,7 +9,7 @@
 
 基于 **NapCat + NoneBot2** 的 QQ 智能 Agent Bot。Python 3.14，Conda 环境 `QQBot`（`D:\Anaconda\envs\QQBot`）。
 
-核心能力：多轮对话、人格系统、MCP/本地工具调用、Skill 渐进式披露、定时提醒、主动发言。
+核心能力：多轮对话、人格系统、MCP/本地工具调用、Skill 渐进式披露、定时提醒、心跳 + 主动发言、对话压缩（Compaction）、记忆管理。
 
 ## 技术栈
 
@@ -50,8 +50,10 @@ Admin 私聊每次请求动态从磁盘读取以下文件组装 system prompt（
 | `AGENTS.md` | 操作手册 — 核心原则、记忆规则、工具使用指南 |
 | `USER.md` | 用户档案 — Admin 的个人信息和偏好 |
 | `MEMORY.md` | 长期记忆 — 跨会话事实/情感记录 |
+| `HEARTBEAT.md` | 心跳任务 — 定时唤醒时的任务清单 |
 
-加载函数 `_load_admin_prompt()` 在 `plugins/chat/handler.py` 中，按上述顺序拼接各文件内容。
+加载函数 `load_admin_prompt()` 在 `plugins/chat/handler.py` 中，按上述顺序拼接各文件内容。
+`HEARTBEAT.md` 不在此加载，而是在心跳触发时由 `proactive.py` 单独读取。
 非 Admin 用户私聊会收到"请在群里跟我聊天哦~"提示。
 
 ### Admin 工具链
@@ -103,7 +105,8 @@ plugins/
 ├── __init__.py          # 空文件
 ├── chat/               # 私聊（仅 Admin）
 │   ├── handler.py      #   对话处理 + Agentic Loop
-│   └── proactive.py    #   Admin 主动发言
+│   ├── compaction.py   #   对话压缩 + 记忆提取
+│   └── proactive.py    #   心跳 + 主动发言
 ├── group/              # 群聊
 │   ├── handler.py      #   对话处理 + Agentic Loop
 │   ├── chatlog.py      #   全量消息记录
@@ -197,22 +200,16 @@ spec.loader.exec_module(mod)
 - 配套 Skill：在 `data/skills/` 中添加指导 LLM 如何安全操作电脑的 Skill
 - `runtime_context.py` 已为私聊注入完整环境信息（OS、Shell、Workspace、Git），群聊不注入这些
 
-### 3. Compaction + 长短期记忆（优先级：高）
+### 3. 长期记忆 RAG（优先级：高）
 
-**目标**: 对话历史超过阈值时自动压缩摘要，重要信息存入长期记忆。
+**目标**: MEMORY.md 增长后，通过向量语义搜索按需检索记忆，而不是全量注入 system prompt。
 
-**私聊方案**:
-- 压缩（Compaction）：对话 token 接近上限时，调用 LLM 对旧消息生成摘要，替换原始消息
-- 短期记忆：当前会话 `history.jsonl`，靠 trim + compaction 管理
-- 长期记忆：`data/admin/MEMORY.md`，LLM 主动或被指示写入跨会话事实
-- 需要 `memory_write` / `memory_read` 本地工具，仅操作 `MEMORY.md`
-
-**群聊方案**:
-- Compaction 逻辑类似，在 `plugins/group/handler.py` 或 `plugins/group/utils.py` 中实现
-- 长期记忆存储在 `data/sessions/groups/<gid>/MEMORY.md`，按群隔离
-- 群聊的 compaction 需要考虑多人格隔离（每个 persona 的 history 独立压缩）
-
-**参考**: OpenClaw 的 compaction 策略 — head(70%) 保留 + 中间压缩 + tail(20%) 保留
+**实现方向**:
+- 添加 `memory_search` 工具（基于 Embedding 语义搜索）
+- 添加 `memory_get` 工具（精确行读取）
+- 当前 `read_file`/`write_file` 工具保留作为手动读写记忆的备选
+- System prompt 中 MEMORY.md 改为摘要注入或完全去掉，改由工具检索
+- 参考 OpenClaw 的 memory_search + memory_get 两步走架构
 
 ### 4. 图片理解 / 多模态（优先级：中）
 

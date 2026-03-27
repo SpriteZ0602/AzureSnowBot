@@ -55,6 +55,7 @@ Admin 私聊每次请求动态从磁盘读取以下文件组装 system prompt（
 | `data/admin/AGENTS.md` | 操作手册 — 核心原则、记忆规则、工具使用指南 |
 | `data/admin/USER.md` | 用户档案 — Admin 的个人信息和偏好 |
 | `data/admin/MEMORY.md` | 长期记忆 — 跨会话事实/情感记录 |
+| `data/admin/HEARTBEAT.md` | 心跳任务 — 定时唤醒时的任务清单 |
 
 Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP）。
 
@@ -97,6 +98,9 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 | `random_number` | 生成指定范围的随机整数 |
 | `set_reminder` | 一次性定时提醒（"X分钟后提醒我做Y"） |
 | `set_daily_reminder` | 每日定时提醒（"每天9点提醒我签到"） |
+| `read_file` | 读取文件内容（仅 Admin 私聊，限 data/ 目录） |
+| `write_file` | 写入文件内容（仅 Admin 私聊，限 data/ 目录） |
+| `list_files` | 列出目录文件（仅 Admin 私聊，限 data/ 目录） |
 | `cancel_reminder` | 取消已设置的提醒（一次性/每日） |
 | `list_reminders` | 查看当前对话的待触发提醒 |
 
@@ -124,16 +128,24 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 - 支持按时间、发送者、关键词过滤查询
 - 不会传入 LLM 的普通请求，仅在工具调用时按需加载
 
-### 主动发言（Proactive Messaging）
+### 心跳 + 主动发言（Heartbeat + Proactive Messaging）
 
-Admin 私聊专属功能 —— Bot 在对话结束一段时间后，自主决定是否主动找你聊天：
+Admin 私聊专属功能 —— 定时唤醒 LLM，让它自主决定做什么：
 
-- Bot 回复 admin 后启动空闲计时器（默认 1 小时，可通过 `PROACTIVE_IDLE_SECONDS` 配置）
-- admin 再次对话会重置计时器
-- 计时器到期后，携带完整对话历史询问 LLM 是否想主动说点什么
-- LLM 有话说 → 直接发送并写入对话历史；回复 NO → 无事发生
-- 主动发言后不重置计时器，避免自言自语循环；下次 admin 发消息并得到回复后才重新启动
-- Admin 执行 `/reset` 清空对话历史时自动取消空闲计时器
+- Bot 启动时自动开启心跳计时器（默认 1 小时，可通过 `PROACTIVE_IDLE_SECONDS` 配置）
+- 计时器到期后，加载完整上下文 + `HEARTBEAT.md` 任务清单 + 完整工具链
+- LLM 可以：调用工具整理记忆（用户无感）、主动发消息（写入历史并发送）、或回复 `HEARTBEAT_OK`（静默）
+- 对话期间计时器不会完全重置，而是取 max(10分钟, 剩余时间)，确保心跳不会因频繁聊天而永远不触发
+- `HEARTBEAT.md` 可随时修改，无需重启 Bot
+
+### 对话压缩（Compaction）
+
+Admin 私聊对话历史超过 token 阈值时自动压缩：
+
+- 当历史 token 超过 80K 时触发
+- 保留最近 40% 的消息完整，旧消息调用 LLM 生成摘要
+- 压缩时自动提取重要信息写入 `MEMORY.md`（用户偏好、决定、承诺等）
+- 压缩后 `history.jsonl` 被重写为 `[摘要消息] + [保留消息]`
 
 ### Skill 技能系统（渐进式披露）
 
@@ -179,7 +191,8 @@ AzureSnowBot/
 │   ├── chunker.py                 #   消息分条发送 + 人类节奏模拟
 │   ├── chat/                      #   私聊对话（仅 Admin）
 │   │   ├── handler.py             #     消息处理 + Agentic Loop
-│   │   └── proactive.py           #     Admin 主动发言（空闲计时器）
+│   │   ├── compaction.py          #     对话压缩 + 记忆提取
+│   │   └── proactive.py           #     心跳 + 主动发言（完整工具链）
 │   ├── group/                     #   群聊对话
 │   │   ├── handler.py             #     消息处理 + Agentic Loop
 │   │   ├── chatlog.py             #     全量群聊记录（旁路存储）
@@ -218,6 +231,7 @@ AzureSnowBot/
 │   │   ├── AGENTS.md              #   操作手册
 │   │   ├── USER.md                #   用户档案
 │   │   ├── MEMORY.md              #   长期记忆
+│   │   ├── HEARTBEAT.md           #   心跳任务清单
 │   │   ├── config.json            #   {"last_message_at": "..."}
 │   │   └── history.jsonl          #   对话历史
 │   ├── sessions/groups/           # 群聊会话
@@ -231,6 +245,10 @@ AzureSnowBot/
 │   ├── test_chatlog.py
 │   ├── test_chunker.py
 │   ├── test_persona.py
+│   ├── test_compaction.py
+│   ├── test_file_tools.py
+│   ├── test_local_tools_manager.py
+│   ├── test_runtime_context.py
 │   ├── test_proactive.py
 │   ├── test_scheduler.py
 │   └── test_skill.py
@@ -420,7 +438,10 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] Admin 主动发言（空闲计时器 + LLM 自主决策）
 - [x] Admin 动态上下文（多文件 system prompt + 长期记忆）
 - [x] 运行时上下文注入（模型名、OS、渠道、工具摘要）
+- [x] 对话压缩（Compaction + 记忆提取）
+- [x] 心跳机制（HEARTBEAT.md 文件驱动 + 完整工具链）
+- [x] Admin 文件系统工具（read_file / write_file / list_files，仅私聊）
+- [ ] 长期记忆 RAG（Embedding 语义搜索）
 - [ ] 电脑操控工具 & Skill（仅 Admin 私聊）
-- [ ] Compaction + 长短期记忆（私聊 + 群聊）
 - [ ] 图片理解 / 多模态（私聊 + 群聊）
 - [ ] 各类 Skill 扩展
