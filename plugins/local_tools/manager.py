@@ -40,6 +40,7 @@ class LocalTool:
     description: str
     parameters: dict[str, Any]  # JSON Schema 格式
     execute: Callable[..., Awaitable[str] | str]
+    admin_only: bool = False
 
 
 # ──────────────────── 全局注册表 ────────────────────
@@ -50,6 +51,7 @@ def register_tool(
     name: str,
     description: str,
     parameters: dict[str, Any] | None = None,
+    admin_only: bool = False,
 ) -> Callable:
     """
     工具注册装饰器。
@@ -58,6 +60,7 @@ def register_tool(
         name: 工具名称（不含前缀）
         description: 工具描述（LLM 可见）
         parameters: JSON Schema 格式的参数定义，None 表示无参数
+        admin_only: 是否仅 Admin 私聊可用
 
     示例:
         @register_tool(
@@ -82,6 +85,7 @@ def register_tool(
             description=description,
             parameters=parameters,
             execute=func,
+            admin_only=admin_only,
         )
         _registry[name] = tool
         logger.info(f"已注册本地工具: {TOOL_PREFIX}__{name} — {description[:50]}")
@@ -92,10 +96,12 @@ def register_tool(
 
 # ──────────────────── OpenAI 格式转换 ────────────────────
 
-def get_openai_tools() -> list[dict]:
-    """将所有本地工具转换为 OpenAI function calling 的 tools 格式"""
+def get_openai_tools(*, chat_type: str = "private") -> list[dict]:
+    """将本地工具转换为 OpenAI function calling 格式，按 chat_type 过滤 admin_only 工具"""
     tools = []
     for name, tool in _registry.items():
+        if tool.admin_only and chat_type != "private":
+            continue
         tools.append({
             "type": "function",
             "function": {
@@ -145,10 +151,12 @@ async def handle_tool_call(
 
 # ──────────────────── 摘要 ────────────────────
 
-def list_tools_summary() -> list[str]:
-    """返回所有本地工具的摘要列表"""
+def list_tools_summary(*, chat_type: str = "private") -> list[str]:
+    """返回本地工具的摘要列表，按 chat_type 过滤"""
     lines = []
     for name, tool in _registry.items():
+        if tool.admin_only and chat_type != "private":
+            continue
         desc = tool.description[:60]
         lines.append(f"  • {TOOL_PREFIX}__{name} — {desc}")
     return lines

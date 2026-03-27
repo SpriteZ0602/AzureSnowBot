@@ -15,9 +15,20 @@ from nonebot.exception import FinishedException
 from nonebot.log import logger
 
 from ..chunker import chunk_text, send_chunked
+from ..runtime_context import build_runtime_context
 from ..local_tools.manager import (
     get_openai_tools as local_openai_tools,
     handle_tool_call as local_handle_tool_call,
+)
+from ..mcp.manager import (
+    get_openai_tools as mcp_openai_tools,
+    call_tool as mcp_call_tool,
+    MAX_TOOL_ROUNDS,
+)
+from ..skill.manager import (
+    build_catalog_prompt as skill_catalog_prompt,
+    get_openai_tools as skill_openai_tools,
+    handle_tool_call as skill_handle_tool_call,
 )
 from .proactive import reset_idle_timer, cancel_idle_timer
 
@@ -29,20 +40,30 @@ ADMIN_NUMBER: str = str(getattr(config, "admin_number", ""))
 # 会话目录
 ADMIN_DIR = Path("data/admin")
 ADMIN_DIR.mkdir(parents=True, exist_ok=True)
-PRIVATE_DIR = Path("data/private")
-PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
 
-# 加载公共基底提示词
-_base_path = Path("data/personas/_base.txt")
-_BASE_PROMPT = _base_path.read_text(encoding="utf-8").strip() if _base_path.exists() else ""
+# Admin 上下文文件列表（每次请求时动态读取）
+_ADMIN_CONTEXT_FILES = [
+    "admin_persona.md",    # SOUL — 人格灵魂
+    "AGENTS.md",           # 操作手册
+    "USER.md",             # 用户档案
+    "MEMORY.md",           # 长期记忆
+]
 
-SYSTEM_PROMPT = "你是一个有用的助手，请用中文回答用户的问题。"
-if _BASE_PROMPT:
-    SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n\n{_BASE_PROMPT}"
 
-# 加载 Admin 专属人格（迁移后路径）
-_admin_persona_path = ADMIN_DIR / "admin_persona.txt"
-ADMIN_PROMPT = _admin_persona_path.read_text(encoding="utf-8").strip() if _admin_persona_path.exists() else ""
+_FALLBACK_PROMPT = "你是一个有用的助手，请用中文回答用户的问题。"
+
+
+def load_admin_prompt() -> str:
+    """动态加载 Admin 上下文（每次调用都从磁盘读取，支持热更新）"""
+    sections: list[str] = []
+    for filename in _ADMIN_CONTEXT_FILES:
+        fpath = ADMIN_DIR / filename
+        if fpath.exists():
+            content = fpath.read_text(encoding="utf-8").strip()
+            if content:
+                sections.append(f"# {filename}\n{content}")
+    return "\n\n".join(sections) if sections else ""
+
 
 # 256K 上下文窗口，预留 20% 安全缓冲 + 4096 给回复
 MAX_CONTEXT_TOKENS = 256_000
@@ -67,12 +88,8 @@ def estimate_message_tokens(msg: dict) -> int:
 # ──────────────────── 路径工具 ────────────────────
 
 def _user_dir(user_id: str) -> Path:
-    """获取用户的数据目录（admin → data/admin, 普通用户 → data/private/<uid>）"""
-    if ADMIN_NUMBER and user_id == str(ADMIN_NUMBER):
-        return ADMIN_DIR
-    d = PRIVATE_DIR / user_id
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """获取用户的数据目录（仅 Admin 私聊可用）"""
+    return ADMIN_DIR
 
 
 def _session_path(user_id: str) -> Path:
@@ -158,7 +175,8 @@ def build_time_context(user_id: str) -> str:
 # ──────────────────── 历史截断 ────────────────────
 def trim_history(messages: list[dict]) -> list[dict]:
     """从最新消息向前保留，直到累计 token 接近上限"""
-    system_tokens = estimate_message_tokens({"role": "system", "content": SYSTEM_PROMPT})
+    # 预估 system prompt 占用（Admin 上下文约 3000~5000 tokens）
+    system_tokens = 5000
     budget = MAX_HISTORY_TOKENS - system_tokens
     trimmed: list[dict] = []
     total = 0
@@ -200,6 +218,10 @@ async def handle_chat(event: PrivateMessageEvent):
 
     user_id = str(event.user_id)
 
+    # 仅 Admin 可以私聊
+    if not ADMIN_NUMBER or user_id != str(ADMIN_NUMBER):
+        await chat.finish("请在群里跟我聊天哦~")
+
     # 检查是否引用了消息
     quoted_text = ""
     reply_id = None
@@ -235,9 +257,14 @@ async def handle_chat(event: PrivateMessageEvent):
     history = load_history(user_id)
     trimmed = trim_history(history)
 
-    # 组装 messages（Admin 使用专属人格）
-    prompt = ADMIN_PROMPT if (ADMIN_NUMBER and user_id == str(ADMIN_NUMBER) and ADMIN_PROMPT) else SYSTEM_PROMPT
-    prompt += build_time_context(user_id)
+    # 组装 messages（动态上下文）
+    prompt = load_admin_prompt() or _FALLBACK_PROMPT
+    skill_catalog = skill_catalog_prompt()
+    if skill_catalog:
+        prompt += "\n" + skill_catalog
+    cfg = _load_config(user_id)
+    last = cfg.get("last_message_at", "")
+    prompt += build_runtime_context(chat_type="private", last_message_at=last)
     messages = [{"role": "system", "content": prompt}] + trimmed
 
     headers = {
@@ -249,8 +276,8 @@ async def handle_chat(event: PrivateMessageEvent):
         "messages": messages,
     }
 
-    # 本地工具注入
-    openai_tools = local_openai_tools()
+    # 工具注入（完整工具链：Skill + 本地 + MCP）
+    openai_tools = skill_openai_tools() + local_openai_tools() + mcp_openai_tools()
     if openai_tools:
         payload["tools"] = openai_tools
 
@@ -263,8 +290,6 @@ async def handle_chat(event: PrivateMessageEvent):
         "_user_id": user_id,
         "_sender_name": sender_name,
     }
-
-    MAX_TOOL_ROUNDS = 10
 
     try:
         async with httpx.AsyncClient(timeout=120) as client:
@@ -287,9 +312,7 @@ async def handle_chat(event: PrivateMessageEvent):
                         bot = get_bot()
                         chunks = chunk_text(reply)
                         await send_chunked(bot, event, chunks, reply_first=False)
-                        # Admin 私聊回复后启动主动发言计时器
-                        if user_id == str(ADMIN_NUMBER):
-                            reset_idle_timer()
+                        reset_idle_timer()
                     return
 
                 # 处理工具调用
@@ -304,9 +327,16 @@ async def handle_chat(event: PrivateMessageEvent):
                     except json.JSONDecodeError:
                         fn_args = {}
 
-                    tool_result = await local_handle_tool_call(fn_name, fn_args, context=_tool_context)
-                    if tool_result is None:
-                        tool_result = f"[错误] 未知工具: {fn_name}"
+                    # 分发链路：Skill → 本地工具 → MCP
+                    skill_result = skill_handle_tool_call(fn_name, fn_args)
+                    if skill_result is not None:
+                        tool_result = skill_result
+                    else:
+                        local_result = await local_handle_tool_call(fn_name, fn_args, context=_tool_context)
+                        if local_result is not None:
+                            tool_result = local_result
+                        else:
+                            tool_result = await mcp_call_tool(fn_name, fn_args)
 
                     messages.append({
                         "role": "tool",
@@ -321,8 +351,7 @@ async def handle_chat(event: PrivateMessageEvent):
             append_message(user_id, {"role": "assistant", "content": reply})
             bot = get_bot()
             await send_chunked(bot, event, [reply], reply_first=False)
-            if user_id == str(ADMIN_NUMBER):
-                reset_idle_timer()
+            reset_idle_timer()
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await chat.finish(f"API 请求失败 ({e.response.status_code})")

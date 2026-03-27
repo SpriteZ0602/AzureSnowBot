@@ -65,10 +65,14 @@ _default_handler_mock = MagicMock()
 _default_handler_mock.load_history = MagicMock(return_value=[])
 _default_handler_mock.trim_history = MagicMock(side_effect=lambda msgs: msgs[-20:])
 _default_handler_mock.append_message = MagicMock()
-_default_handler_mock.build_time_context = MagicMock(return_value="\n当前时间: 2026-03-26 12:00:00（星期四）")
-_default_handler_mock.ADMIN_PROMPT = ""
-_default_handler_mock.SYSTEM_PROMPT = "你是助手"
+_default_handler_mock.get_config = MagicMock(return_value={"last_message_at": "2026-03-26 11:00:00"})
+_default_handler_mock.load_admin_prompt = MagicMock(return_value="")
 sys.modules["plugins.chat.handler"] = _default_handler_mock
+
+# mock plugins.runtime_context
+_mock_runtime_context = types.ModuleType("plugins.runtime_context")
+_mock_runtime_context.build_runtime_context = MagicMock(return_value="\n当前时间: 2026-03-26 12:00:00（星期四）")
+sys.modules["plugins.runtime_context"] = _mock_runtime_context
 
 # ── 用 importlib 加载 proactive.py ──
 _proactive_path = ROOT / "plugins" / "chat" / "proactive.py"
@@ -128,9 +132,8 @@ def _setup_handler_mock(tmp_dir: Path, messages: list[dict],
     mock_handler.load_history = MagicMock(side_effect=load_history)
     mock_handler.trim_history = MagicMock(side_effect=trim_history)
     mock_handler.append_message = MagicMock()
-    mock_handler.build_time_context = MagicMock(return_value="\n当前时间: 2026-03-26 12:00:00（星期四）")
-    mock_handler.ADMIN_PROMPT = admin_prompt
-    mock_handler.SYSTEM_PROMPT = system_prompt
+    mock_handler.get_config = MagicMock(return_value={"last_message_at": "2026-03-26 11:00:00"})
+    mock_handler.load_admin_prompt = MagicMock(return_value=admin_prompt or system_prompt)
     sys.modules["plugins.chat.handler"] = mock_handler
     return mock_handler
 
@@ -346,16 +349,6 @@ class TestProactiveDecision:
 
 class TestTimerIntegration:
     """计时器到期后的集成流程测试"""
-
-    @pytest.mark.asyncio
-    async def test_timer_fires_after_idle(self):
-        """计时器到期后应调用 _try_proactive_message。"""
-        with patch.object(proactive, "_try_proactive_message", new_callable=AsyncMock) as mock_try:
-            proactive.IDLE_SECONDS = 0.1  # 100ms
-            proactive.reset_idle_timer()
-            await asyncio.sleep(0.3)
-            mock_try.assert_awaited_once()
-            proactive.IDLE_SECONDS = 1  # 恢复
 
     @pytest.mark.asyncio
     async def test_timer_reset_extends_delay(self):

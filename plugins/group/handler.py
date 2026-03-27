@@ -13,6 +13,7 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageSegment
 from nonebot.exception import FinishedException
 from nonebot.log import logger
 
+from ..runtime_context import build_runtime_context
 from ..persona.manager import (
     get_active_persona, load_persona_prompt,
     load_history, append_message, get_group_config,
@@ -82,14 +83,10 @@ async def handle_group_chat(event: GroupMessageEvent):
     if skill_catalog:
         system_prompt += "\n" + skill_catalog
 
-    # 注入时间上下文
-    _weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-    now = datetime.now()
-    now_str = f"{now.strftime('%Y-%m-%d %H:%M:%S')}（{_weekdays[now.weekday()]}）"
+    # 注入运行时上下文
     group_cfg = get_group_config(group_id)
     last = group_cfg.get("last_message_at", "")
-    time_ctx = f"\n当前时间: {now_str}，上次对话: {last}" if last else f"\n当前时间: {now_str}"
-    system_prompt += time_ctx
+    system_prompt += build_runtime_context(chat_type="group", last_message_at=last)
 
     # 构建工具调用上下文（供需要环境信息的工具使用，如定时提醒）
     _tool_context = {
@@ -122,8 +119,8 @@ async def handle_group_chat(event: GroupMessageEvent):
         "messages": messages,
     }
 
-    # 合并 MCP 工具 + Skill 工具 + 本地工具
-    openai_tools = get_openai_tools() + skill_openai_tools() + local_openai_tools()
+    # 合并 MCP 工具 + Skill 工具 + 本地工具（群聊过滤 admin_only 工具）
+    openai_tools = get_openai_tools() + skill_openai_tools() + local_openai_tools(chat_type="group")
     if openai_tools:
         payload["tools"] = openai_tools
 

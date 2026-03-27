@@ -30,24 +30,43 @@
 `plugins/llm.py` 是唯一的 LLM 配置中心，导出 `API_KEY, BASE_URL, MODEL`。所有调用方 `from ..llm import ...`，**不要**在其他模块硬编码 API key 或 base URL。
 
 ### 对话历史
-- **Admin 私聊**: `data/admin/history.jsonl`，人格在 `data/admin/admin_persona.txt`，配置在 `data/admin/config.json`。
-- **普通私聊**: `data/private/<uid>/history.jsonl`，配置在 `data/private/<uid>/config.json`。
+- **Admin 私聊**: `data/admin/history.jsonl`，人格在 `data/admin/admin_persona.md`，配置在 `data/admin/config.json`。
+- **私聊仅限 Admin**：非 Admin 用户私聊会收到“请在群里跟我聊天哦~”提示。
 - **群聊**: `data/sessions/groups/<gid>/<persona>.jsonl`，按人格隔离。配置在 `data/sessions/groups/<gid>/config.json`（含 `active_persona` + `last_message_at`）。
 - **消息格式**: `{"role": "user", "content": "你好"}`，纯净的 role/content 格式，不嵌入时间戳。
 - **时间上下文**: 每次组装 LLM 请求时，在 system prompt 末尾追加当前时间和上次对话时间（从 `config.json` 的 `last_message_at` 读取），如 `"\n当前时间: 2026-03-26 14:30:00（星期四），上次对话: 2026-03-26 12:00:00"`。这样 LLM 能感知时间但不会在回复中复述时间戳。
 - **config.json**: 每次 `append_message()` 同时更新 `last_message_at` 字段，用于时间上下文和主动发言功能。
-- 私聊由 `plugins/chat/handler.py` 管理 `load_history` / `append_message` / `trim_history` / `build_time_context`。
+- 私聊由 `plugins/chat/handler.py` 管理 `load_history` / `append_message` / `trim_history`（仅 Admin）。
+- 运行时上下文由 `plugins/runtime_context.py` 统一构建，私聊/群聊共用。
 - 群聊由 `plugins/persona/manager.py` 管理 `load_history` / `append_message`，`plugins/group/utils.py` 提供 `trim_history`。
-- **两套接口不同**，私聊是 `load_history(uid)`，群聊是 `load_history(gid, persona_name)`。这是已知的架构分裂，未来如果统一需要做 adapter 层。
+- **两套接口不同**，私聊是 `load_history(uid)`（仅 Admin），群聊是 `load_history(gid, persona_name)`。这是已知的架构分裂，未来如果统一需要做 adapter 层。
+
+### Admin 上下文文件（私聊）
+Admin 私聊每次请求动态从磁盘读取以下文件组装 system prompt（支持热更新）：
+
+| 文件 | 用途 |
+|------|------|
+| `admin_persona.md` | SOUL — 人格灵魂（角色设定） |
+| `AGENTS.md` | 操作手册 — 核心原则、记忆规则、工具使用指南 |
+| `USER.md` | 用户档案 — Admin 的个人信息和偏好 |
+| `MEMORY.md` | 长期记忆 — 跨会话事实/情感记录 |
+
+加载函数 `_load_admin_prompt()` 在 `plugins/chat/handler.py` 中，按上述顺序拼接各文件内容。
+非 Admin 用户私聊会收到"请在群里跟我聊天哦~"提示。
+
+### Admin 工具链
+Admin 私聊拥有完整工具链（与群聊一致）：
+- **Skill 工具**（渐进式加载） + **本地工具**（@register_tool） + **MCP 工具**（外部服务）
+- 分发优先级：Skill → 本地 → MCP
 
 ### 数据目录结构
 ```
 data/
 ├── admin/                     # Admin 私聊专用
-│   ├── admin_persona.txt      #   人格 prompt
-│   ├── config.json            #   {"last_message_at": "..."}
-│   └── history.jsonl          #   对话历史
-├── private/<uid>/             # 普通私聊
+│   ├── admin_persona.md       #   人格 prompt (SOUL)
+│   ├── AGENTS.md              #   操作手册
+│   ├── USER.md                #   用户档案
+│   ├── MEMORY.md              #   长期记忆
 │   ├── config.json            #   {"last_message_at": "..."}
 │   └── history.jsonl          #   对话历史
 ├── sessions/groups/<gid>/     # 群聊
@@ -62,7 +81,7 @@ data/
 ```
 
 ### Agentic Loop（工具调用）
-群聊和私聊都有 Agentic Loop：
+群聊和 Admin 私聊都有完整 Agentic Loop：
 1. 发 LLM 请求（带 tools）
 2. 如果 LLM 返回 `tool_calls` → 执行工具 → 把结果塞回 messages → 回到 1
 3. 最多 10 轮（`MAX_TOOL_ROUNDS`）
@@ -78,10 +97,11 @@ data/
 ```
 plugins/
 ├── llm.py              # LLM 配置中心
+├── runtime_context.py  # 运行时上下文（时间、Runtime、渠道、工具摘要）
 ├── chunker.py          # 分条发送
 ├── ping.py             # 存活检测
 ├── __init__.py          # 空文件
-├── chat/               # 私聊
+├── chat/               # 私聊（仅 Admin）
 │   ├── handler.py      #   对话处理 + Agentic Loop
 │   └── proactive.py    #   Admin 主动发言
 ├── group/              # 群聊
@@ -167,19 +187,52 @@ spec.loader.exec_module(mod)
 - `group_id` 从 `kwargs["_target_id"]` 获取（handler 自动传入的工具上下文）
 - **注意**: `tools.py` 中不需要 `import time`，`load_chatlog()` 内部自己处理时间过滤
 
-### 2. 主动发言扩展到群聊（优先级：中）
+### 2. 电脑操控工具 & Skill（优先级：高，仅 Admin 私聊）
+
+**目标**: Admin 私聊中 Bot 可以操控本地电脑（文件读写、命令执行、浏览器等）。
+
+**实现方向**:
+- 在 `plugins/local_tools/tools.py` 或新文件中添加系统操作工具（如 `run_command`, `read_file`, `write_file`）
+- 安全约束：仅 Admin 私聊可触发（handler 已通过 `_tool_context["_chat_type"]` 传入上下文，工具内部可校验）
+- 配套 Skill：在 `data/skills/` 中添加指导 LLM 如何安全操作电脑的 Skill
+- `runtime_context.py` 已为私聊注入完整环境信息（OS、Shell、Workspace、Git），群聊不注入这些
+
+### 3. Compaction + 长短期记忆（优先级：高）
+
+**目标**: 对话历史超过阈值时自动压缩摘要，重要信息存入长期记忆。
+
+**私聊方案**:
+- 压缩（Compaction）：对话 token 接近上限时，调用 LLM 对旧消息生成摘要，替换原始消息
+- 短期记忆：当前会话 `history.jsonl`，靠 trim + compaction 管理
+- 长期记忆：`data/admin/MEMORY.md`，LLM 主动或被指示写入跨会话事实
+- 需要 `memory_write` / `memory_read` 本地工具，仅操作 `MEMORY.md`
+
+**群聊方案**:
+- Compaction 逻辑类似，在 `plugins/group/handler.py` 或 `plugins/group/utils.py` 中实现
+- 长期记忆存储在 `data/sessions/groups/<gid>/MEMORY.md`，按群隔离
+- 群聊的 compaction 需要考虑多人格隔离（每个 persona 的 history 独立压缩）
+
+**参考**: OpenClaw 的 compaction 策略 — head(70%) 保留 + 中间压缩 + tail(20%) 保留
+
+### 4. 图片理解 / 多模态（优先级：中）
+
+**适用**: 私聊 + 群聊均需要。
+
+**实现方向**:
+- 在消息事件中提取图片 URL / base64
+- 构造 multimodal content 格式（OpenAI vision API 格式）
+- Gemini 的 multimodal 接口略有不同，可能需要在 `llm.py` 加适配层
+- `runtime_context.py` 的 Channel capabilities 已包含 "图片"
+
+### 5. 各类 Skill 扩展（优先级：中）
+
+**适用**: 私聊 + 群聊共享。
+
+在 `data/skills/` 中持续添加新技能。Skill 系统已完善（三层渐进式披露），只需写 `SKILL.md` + 可选 `references/` 即可。
+
+### 6. 主动发言扩展到群聊（优先级：低）
 
 **状态**: Admin 私聊版已完成 (`plugins/chat/proactive.py`)。
-
-**当前耦合问题**:
-
-| 硬编码 | 群聊需要改成 |
-|--------|-------------|
-| 全局唯一 `_idle_task` | `dict[str, asyncio.Task]`，按 `group_id` 管理 |
-| `from .handler import load_history(uid)` | `persona.manager.load_history(gid, persona)` |
-| `ADMIN_PROMPT` / `SYSTEM_PROMPT` | `load_persona_prompt(gid, persona_name)` |
-| `send_chunked_raw("private", uid, ...)` | `send_chunked_raw("group", gid, ...)` |
-| `append_message(uid, msg)` | `persona.manager.append_message(gid, persona, msg)` |
 
 **推荐重构**: 提升为 `plugins/proactive.py`（根级模块），抽象为引擎 + 回调模式：
 
@@ -199,14 +252,12 @@ async def try_proactive(
 ) -> None: ...
 ```
 
-然后 `chat/handler.py` 和 `group/handler.py` 各写一小段胶水代码传入各自的加载 / 发送 / 保存函数。
-
 **群聊额外考虑**:
 - 触发条件更复杂：应该是"Bot 参与过对话后一段时间无人 @Bot"，而非"群内任何消息后"
 - 需要防骚扰：主动发言后无人理，不应再次触发循环
 - 成本控制：对话太短（1-2 轮）时可跳过
 
-### 3. 私聊 / 群聊对话历史接口统一（优先级：低）
+### 7. 私聊 / 群聊对话历史接口统一（优先级：低）
 
 两套历史管理接口是历史遗留。最理想的做法是抽出一个通用的 `SessionStore`：
 
@@ -223,16 +274,19 @@ class SessionStore:
 
 但工作量不小且涉及多个模块，等有明确需求再做。
 
-### 4. 图片理解 / 多模态（优先级：低）
+### 8. 运行时上下文差异
 
-Roadmap 中已列出。需要：
-- 在消息事件中提取图片 URL / base64
-- 构造 multimodal content 格式（OpenAI vision API 格式）
-- Gemini 的 multimodal 接口略有不同，可能需要在 `llm.py` 加适配层
+`plugins/runtime_context.py` 按 `chat_type` 区分注入内容：
 
-### 5. 人格 prompt 热更新
-
-当前人格 prompt 在启动时读取（私聊的 `ADMIN_PROMPT`、`SYSTEM_PROMPT`）。修改 txt 文件后需要重启才生效。群聊人格每次调用都重新从文件读取，所以没这个问题。如果要统一，私聊也改成每次读文件即可。
+| 信息 | 私聊（Admin） | 群聊 |
+|------|-------------|------|
+| 当前时间 | ✓ | ✓ |
+| 上次对话时间 | ✓ | ✓ |
+| 模型名 | ✓ | ✓ |
+| OS / 机器名 / Python / Shell | ✓ | ✗（群聊无电脑操控需求） |
+| Workspace / Git root | ✓ | ✗ |
+| 消息渠道 + 能力 | ✓ | ✓ |
+| 可用工具摘要 | ✓ | ✓ |
 
 ## 代码风格约定
 

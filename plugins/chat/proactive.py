@@ -78,10 +78,10 @@ async def _try_proactive_message() -> None:
         load_history,
         trim_history,
         append_message,
-        build_time_context,
-        ADMIN_PROMPT,
-        SYSTEM_PROMPT,
+        get_config,
+        load_admin_prompt,
     )
+    from ..runtime_context import build_runtime_context
 
     if not ADMIN_NUMBER or not API_KEY:
         return
@@ -95,8 +95,10 @@ async def _try_proactive_message() -> None:
         return
 
     trimmed = trim_history(history)
-    prompt = ADMIN_PROMPT if ADMIN_PROMPT else SYSTEM_PROMPT
-    prompt += build_time_context(ADMIN_NUMBER)
+    prompt = load_admin_prompt() or "你是一个有用的助手。"
+    cfg = get_config(ADMIN_NUMBER)
+    last = cfg.get("last_message_at", "")
+    prompt += build_runtime_context(chat_type="private", last_message_at=last)
 
     messages = [{"role": "system", "content": prompt}] + trimmed
     # 把引导词作为独立 system 消息追加在末尾

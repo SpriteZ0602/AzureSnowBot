@@ -11,8 +11,195 @@
 """
 
 from datetime import datetime
+from pathlib import Path
 
 from .manager import register_tool
+
+# ──────────────────────────────────────────────────────
+# Admin 文件系统工具（仅 Admin 私聊可用）
+# ──────────────────────────────────────────────────────
+
+# 允许操作的目录白名单（相对于项目根目录）
+_ALLOWED_ROOTS = [
+    Path("data/admin"),
+    Path("data/skills"),
+    Path("data/personas"),
+]
+
+
+def _check_admin_only(context: dict | None) -> str | None:
+    """校验是否 Admin 私聊，返回错误信息或 None"""
+    if not context or context.get("_chat_type") != "private":
+        return "[错误] 此工具仅限 Admin 私聊使用"
+    return None
+
+
+def _resolve_safe_path(filepath: str) -> tuple[Path, str | None]:
+    """
+    解析文件路径并检查是否在白名单目录内。
+    返回 (resolved_path, error_msg)，error_msg 为 None 表示安全。
+    """
+    try:
+        target = Path(filepath).resolve()
+    except Exception:
+        return Path(), f"[错误] 无效路径: {filepath}"
+
+    # 检查是否在白名单目录内
+    for allowed in _ALLOWED_ROOTS:
+        allowed_abs = allowed.resolve()
+        try:
+            target.relative_to(allowed_abs)
+            return target, None
+        except ValueError:
+            continue
+
+    allowed_str = ", ".join(str(r) for r in _ALLOWED_ROOTS)
+    return target, f"[错误] 路径不在允许范围内。允许的目录: {allowed_str}"
+
+
+@register_tool(
+    name="read_file",
+    description=(
+        "读取指定文件的内容。路径相对于项目根目录，仅限 data/admin/、data/skills/、data/personas/ 目录。"
+        "用途：查看 MEMORY.md、USER.md 等上下文文件的当前内容。"
+    ),
+    admin_only=True,
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "文件路径（相对于项目根），例如: data/admin/MEMORY.md",
+            },
+        },
+        "required": ["path"],
+    },
+)
+async def read_file_tool(
+    path: str = "",
+    _context: dict | None = None,
+    **kwargs,
+) -> str:
+    err = _check_admin_only(_context)
+    if err:
+        return err
+    if not path:
+        return "[错误] 请提供文件路径"
+
+    target, err = _resolve_safe_path(path)
+    if err:
+        return err
+    if not target.exists():
+        return f"[错误] 文件不存在: {path}"
+    if not target.is_file():
+        return f"[错误] 不是文件: {path}"
+
+    try:
+        content = target.read_text(encoding="utf-8")
+        if not content.strip():
+            return f"文件 {path} 内容为空"
+        return content
+    except Exception as e:
+        return f"[错误] 读取失败: {e}"
+
+
+@register_tool(
+    name="write_file",
+    description=(
+        "写入内容到指定文件（覆盖写入）。路径相对于项目根目录，仅限 data/admin/、data/skills/、data/personas/ 目录。"
+        "用途：更新 MEMORY.md（写入长期记忆）、修改 USER.md（更新用户档案）等。"
+        "注意：会覆盖文件全部内容，写入前建议先 read_file 查看当前内容。"
+    ),
+    admin_only=True,
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "文件路径（相对于项目根），例如: data/admin/MEMORY.md",
+            },
+            "content": {
+                "type": "string",
+                "description": "要写入的完整文件内容",
+            },
+        },
+        "required": ["path", "content"],
+    },
+)
+async def write_file_tool(
+    path: str = "",
+    content: str = "",
+    _context: dict | None = None,
+    **kwargs,
+) -> str:
+    err = _check_admin_only(_context)
+    if err:
+        return err
+    if not path:
+        return "[错误] 请提供文件路径"
+
+    target, err = _resolve_safe_path(path)
+    if err:
+        return err
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return f"已写入 {path}（{len(content)} 字符）"
+    except Exception as e:
+        return f"[错误] 写入失败: {e}"
+
+
+@register_tool(
+    name="list_files",
+    description=(
+        "列出指定目录下的文件和子目录。路径相对于项目根目录，仅限 data/admin/、data/skills/、data/personas/ 目录。"
+    ),
+    admin_only=True,
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "目录路径（相对于项目根），例如: data/admin",
+            },
+        },
+        "required": ["path"],
+    },
+)
+async def list_files_tool(
+    path: str = "",
+    _context: dict | None = None,
+    **kwargs,
+) -> str:
+    err = _check_admin_only(_context)
+    if err:
+        return err
+    if not path:
+        return "[错误] 请提供目录路径"
+
+    target, err = _resolve_safe_path(path)
+    if err:
+        return err
+    if not target.exists():
+        return f"[错误] 目录不存在: {path}"
+    if not target.is_dir():
+        return f"[错误] 不是目录: {path}"
+
+    try:
+        items = sorted(target.iterdir())
+        if not items:
+            return f"目录 {path} 为空"
+        lines = []
+        for item in items:
+            if item.is_dir():
+                lines.append(f"  📁 {item.name}/")
+            else:
+                size = item.stat().st_size
+                lines.append(f"  📄 {item.name} ({size} bytes)")
+        return f"{path}/ ({len(items)} 项):\n" + "\n".join(lines)
+    except Exception as e:
+        return f"[错误] 列目录失败: {e}"
 
 
 @register_tool(

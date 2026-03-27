@@ -22,12 +22,14 @@
 | @Bot `/skill reload` | 重新扫描技能目录 |
 | @Bot `/help` | 显示帮助信息 |
 
-### 私聊
+### 私聊（仅 Admin）
+
+私聊仅对 `ADMIN_NUMBER` 配置的管理员开放，其他用户私聊会收到“请在群里跟我聊天哦~”提示。
 
 | 指令 | 说明 |
 |------|------|
-| 任意消息 | 调用 LLM 进行多轮对话（支持引用消息 + 工具调用） |
-| `/reset` | 清空当前用户的对话历史 |
+| 任意消息 | 调用 LLM 进行多轮对话（支持引用消息 + 完整工具链） |
+| `/reset` | 清空对话历史 |
 | `ping` | 回复 `pong~`，检测 Bot 是否在线 |
 
 ### 人格系统
@@ -36,12 +38,25 @@
 
 - **通用人格**：`data/personas/<name>.txt`，所有群共享
 - **群私有人格**：`data/sessions/groups/<gid>/personas/<name>.txt`，仅该群可见
-- **管理员私聊人格**：`data/sessions/admin_persona.txt`，仅 `ADMIN_NUMBER` 对应的私聊用户使用
-- **共享基础指令**：`data/personas/_base.txt`，自动追加到所有人格 prompt 末尾（回复风格、格式约束等）
+- **Admin 上下文文件**：Admin 私聊使用独立的多文件 system prompt（见下方）
+- **共享基础指令**：`data/personas/_base.txt`，自动追加到所有群聊人格 prompt 末尾
 
 查找优先级：群私有 > 通用（同名时群的覆盖通用）
 
 内置人格：`default`（默认）、`catgirl`（猫娘）、`philosopher`（哲学家）、`roaster`（毒舌）
+
+### Admin 上下文文件
+
+Admin 私聊每次请求动态从磁盘读取以下文件组装 system prompt（支持热更新，无需重启）：
+
+| 文件 | 用途 |
+|------|------|
+| `data/admin/admin_persona.md` | SOUL — 人格灵魂（角色设定） |
+| `data/admin/AGENTS.md` | 操作手册 — 核心原则、记忆规则、工具使用指南 |
+| `data/admin/USER.md` | 用户档案 — Admin 的个人信息和偏好 |
+| `data/admin/MEMORY.md` | 长期记忆 — 跨会话事实/情感记录 |
+
+Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP）。
 
 ### 消息分条发送（Chunker）
 
@@ -159,9 +174,10 @@ AzureSnowBot/
 ├── plugins/                       # NoneBot2 插件目录
 │   ├── __init__.py
 │   ├── llm.py                     #   LLM 统一配置（多 Provider 切换）
+│   ├── runtime_context.py         #   运行时上下文（时间、环境、渠道、工具摘要）
 │   ├── ping.py                    #   存活检测
 │   ├── chunker.py                 #   消息分条发送 + 人类节奏模拟
-│   ├── chat/                      #   私聊对话
+│   ├── chat/                      #   私聊对话（仅 Admin）
 │   │   ├── handler.py             #     消息处理 + Agentic Loop
 │   │   └── proactive.py           #     Admin 主动发言（空闲计时器）
 │   ├── group/                     #   群聊对话
@@ -198,14 +214,13 @@ AzureSnowBot/
 │   │   └── roaster.txt            #   毒舌
 │   ├── reminders.json             # 定时提醒持久化数据
 │   ├── admin/                     # 管理员私聊
-│   │   ├── admin_persona.txt      #   管理员专属人格
+│   │   ├── admin_persona.md       #   人格 prompt (SOUL)
+│   │   ├── AGENTS.md              #   操作手册
+│   │   ├── USER.md                #   用户档案
+│   │   ├── MEMORY.md              #   长期记忆
 │   │   ├── config.json            #   {"last_message_at": "..."}
 │   │   └── history.jsonl          #   对话历史
-│   ├── private/                   # 普通私聊
-│   │   └── <user_id>/
-│   │       ├── config.json        #   {"last_message_at": "..."}
-│   │       └── history.jsonl      #   对话历史
-│   └── sessions/groups/           # 群聊会话
+│   ├── sessions/groups/           # 群聊会话
 │       └── <group_id>/
 │           ├── config.json        #   {"active_persona": "...", "last_message_at": "..."}
 │           ├── <persona>.jsonl    #   对话历史（按人格隔离）
@@ -284,16 +299,20 @@ ADMIN_NUMBER=你的QQ号
 | `LLM_MODEL` | （可选）覆盖默认模型名称 | 按 provider 自动选择 |
 | `LLM_BASE_URL` | （可选）覆盖默认接口地址 | 按 provider 自动选择 |
 | `GROUP_WHITELIST` | 允许使用的群号列表（JSON 数组） | `[]`（空 = 不响应任何群） |
-| `ADMIN_NUMBER` | 管理员 QQ 号，该用户私聊时读取专属人格 | 空 |
+| `ADMIN_NUMBER` | 管理员 QQ 号，仅该用户可以私聊 Bot | 空 |
 | `PROACTIVE_IDLE_SECONDS` | Admin 私聊主动发言空闲等待秒数 | `3600`（1 小时） |
 
-2. 如果需要管理员私聊专属人格，创建文件：
+2. 配置 Admin 上下文文件（可选，按需编辑）：
 
-```text
-data/admin/admin_persona.txt
+```
+data/admin/
+├── admin_persona.md    # 人格设定（必需）
+├── AGENTS.md           # 操作手册（可选）
+├── USER.md             # 用户档案（可选）
+└── MEMORY.md           # 长期记忆（可选）
 ```
 
-当私聊用户 QQ 号与 `ADMIN_NUMBER` 一致时，会优先使用这个文件作为 system prompt。（首次启动时会自动从旧路径 `data/sessions/admin_persona.txt` 迁移）
+每次对话时动态读取，修改后立即生效，无需重启。
 
 3. 在 NapCat WebUI 中添加 **WebSocket 客户端**，地址设为：
 
@@ -399,4 +418,9 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] 定时提醒（参考 OpenClaw cron 调度器）
 - [x] 私聊工具调用（Agentic Loop）
 - [x] Admin 主动发言（空闲计时器 + LLM 自主决策）
-- [ ] 图片理解 / 多模态
+- [x] Admin 动态上下文（多文件 system prompt + 长期记忆）
+- [x] 运行时上下文注入（模型名、OS、渠道、工具摘要）
+- [ ] 电脑操控工具 & Skill（仅 Admin 私聊）
+- [ ] Compaction + 长短期记忆（私聊 + 群聊）
+- [ ] 图片理解 / 多模态（私聊 + 群聊）
+- [ ] 各类 Skill 扩展

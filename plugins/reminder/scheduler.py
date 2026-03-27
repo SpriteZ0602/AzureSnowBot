@@ -171,13 +171,9 @@ def _load_conversation(job: ReminderJob) -> tuple[str, list[dict]]:
         else:
             from ..chat.handler import (
                 load_history as chat_load_history,
-                SYSTEM_PROMPT, ADMIN_PROMPT, ADMIN_NUMBER,
+                load_admin_prompt,
             )
-            # Admin 用户使用专属人格
-            if ADMIN_NUMBER and job.target_id == str(ADMIN_NUMBER) and ADMIN_PROMPT:
-                prompt = ADMIN_PROMPT
-            else:
-                prompt = SYSTEM_PROMPT
+            prompt = load_admin_prompt() or "你是一个有用的助手。"
             history = chat_load_history(job.target_id)
             return prompt, history
     except Exception as e:
