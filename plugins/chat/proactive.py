@@ -55,6 +55,11 @@ def _build_heartbeat_instruction() -> str:
         if content:
             parts.append(f"# HEARTBEAT.md\n{content}")
 
+    # 注入 pending reminders，防止心跳重复提醒已有定时器的事项
+    pending_info = _format_pending_reminders()
+    if pending_info:
+        parts.append(pending_info)
+
     # 核心指令
     parts.append(
         "【系统指令 — 心跳】\n"
@@ -67,6 +72,27 @@ def _build_heartbeat_instruction() -> str:
     )
 
     return "\n\n".join(parts)
+
+
+def _format_pending_reminders() -> str:
+    """获取待触发的提醒列表，格式化为心跳指令的一部分。"""
+    try:
+        from ..reminder.scheduler import get_all_reminders
+        jobs = get_all_reminders()
+    except Exception:
+        return ""
+
+    if not jobs:
+        return ""
+
+    lines = ["【已设置的定时提醒 — 不要重复提醒这些事项】"]
+    for job in jobs:
+        if job.recurring == "daily":
+            lines.append(f"- 每天 {job.daily_time} 提醒{job.creator_name}：{job.message}")
+        else:
+            lines.append(f"- {job.fire_at} 提醒{job.creator_name}：{job.message}")
+    lines.append("以上事项已有定时器会自动提醒，你不需要也不应该提前或重复提醒。")
+    return "\n".join(lines)
 
 
 # ──────────────────── 计时器状态 ────────────────────
