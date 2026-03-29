@@ -5,7 +5,7 @@
 ## 你可以做的事
 
 ### 静默操作（任何时候都可以做，碧碧看不到）
-- 用 read_file 检查 MEMORY.md，整理重复或过期的条目
+- 用 read_file 检查 MEMORY.md，整理重复、已完成或是过期的条目并删除
 - 用 write_file 更新记忆格式、补充遗漏信息
 - 完成后回复 HEARTBEAT_OK
 

@@ -201,6 +201,9 @@ async def handle_reset(event: PrivateMessageEvent):
     clear_history(user_id)
     if user_id == str(ADMIN_NUMBER):
         cancel_idle_timer()
+        # 清除该用户的所有定时提醒
+        from ..reminder.scheduler import clear_reminders
+        cleared = clear_reminders("private", user_id)
     await reset.finish("对话历史已清除。")
 
 
@@ -274,6 +277,12 @@ async def handle_chat(event: PrivateMessageEvent):
     last = cfg.get("last_message_at", "")
     prompt += build_runtime_context(chat_type="private", last_message_at=last)
     messages = [{"role": "system", "content": prompt}] + trimmed
+
+    # DEBUG: 打印组装好的完整 prompt
+    logger.debug("=== 私聊 Prompt 开始 ===")
+    for i, m in enumerate(messages):
+        logger.debug(f"[{i}] {m['role']}:\n{m.get('content', '')}")
+    logger.debug(f"=== 私聊 Prompt 结束 (共 {len(messages)} 条) ===")
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",

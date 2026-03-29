@@ -340,7 +340,7 @@ class TestHeartbeatDecision:
 
     @pytest.mark.asyncio
     async def test_heartbeat_instruction_appended(self, tmp_session_dir):
-        """心跳指令应作为最后一条 system 消息追加。"""
+        """心跳指令应作为最后一条 user 消息追加（确保 LLM 优先遵循）。"""
         _setup_handler_mock(tmp_session_dir, [
             {"role": "user", "content": "你好"},
             {"role": "assistant", "content": "你好呀"},
@@ -362,7 +362,7 @@ class TestHeartbeatDecision:
         call_args = mock_client.post.call_args
         payload = call_args.kwargs.get("json") or call_args[1].get("json")
         last_msg = payload["messages"][-1]
-        assert last_msg["role"] == "system"
+        assert last_msg["role"] == "user"
         assert "心跳" in last_msg["content"] or "HEARTBEAT" in last_msg["content"]
 
     @pytest.mark.asyncio

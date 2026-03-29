@@ -152,19 +152,33 @@ async def _idle_countdown(delay: float | None = None) -> None:
     try:
         await asyncio.sleep(delay if delay is not None else IDLE_SECONDS)
         await _try_heartbeat()
-        # 无论结果如何，重新启动计时器
-        reset_idle_timer()
+        # 心跳完成后按完整间隔重新启动（不走 reset 的防抖逻辑）
+        _restart_full_timer()
     except asyncio.CancelledError:
         pass
     except Exception as e:
         logger.error(f"心跳异常: {e}")
 
 
+def _restart_full_timer() -> None:
+    """心跳完成后，按完整 IDLE_SECONDS 重新启动计时器。"""
+    global _idle_task, _idle_deadline
+    now = asyncio.get_event_loop().time()
+    _idle_deadline = now + IDLE_SECONDS
+    _idle_task = asyncio.create_task(_idle_countdown(IDLE_SECONDS))
+    logger.debug(f"心跳计时器已重启 ({IDLE_SECONDS}s)")
+
+
 def _is_heartbeat_ok(text: str) -> bool:
-    """检查回复是否为 HEARTBEAT_OK（宽容匹配）"""
+    """检查回复是否为 HEARTBEAT_OK 或无实质内容的短回复（不应发给用户）"""
     stripped = text.strip().upper()
     # 兼容 "HEARTBEAT_OK"、"NO"、纯空
-    return stripped in (HEARTBEAT_OK, "NO", "")
+    if stripped in (HEARTBEAT_OK, "NO", ""):
+        return True
+    # 过短的回复大概率是 LLM 延续对话惯性，不是有意义的主动消息
+    if len(stripped) <= 10:
+        return True
+    return False
 
 
 async def _try_heartbeat() -> None:
@@ -190,15 +204,25 @@ async def _try_heartbeat() -> None:
 
     trimmed = trim_history(history)
 
+    # 心跳只保留最近的对话（避免过长历史淹没心跳指令）
+    HEARTBEAT_MAX_MESSAGES = 30
+    heartbeat_history = trimmed[-HEARTBEAT_MAX_MESSAGES:]
+
     # 组装完整 system prompt（与正常对话一致）
     prompt = load_admin_prompt() or "你是一个有用的助手。"
     cfg = get_config(ADMIN_NUMBER)
     last = cfg.get("last_message_at", "")
     prompt += build_runtime_context(chat_type="private", last_message_at=last)
 
-    messages = [{"role": "system", "content": prompt}] + trimmed
-    # 追加心跳指令
-    messages.append({"role": "system", "content": _build_heartbeat_instruction()})
+    messages = [{"role": "system", "content": prompt}] + heartbeat_history
+    # 追加心跳指令（用 user 角色确保 LLM 优先遵循，而非被对话历史带偏）
+    messages.append({"role": "user", "content": _build_heartbeat_instruction()})
+
+    # DEBUG: 打印组装好的完整 prompt
+    logger.debug("=== 心跳 Prompt 开始 ===")
+    for i, m in enumerate(messages):
+        logger.debug(f"[{i}] {m['role']}:\n{m.get('content', '')}")
+    logger.debug(f"=== 心跳 Prompt 结束 (共 {len(messages)} 条) ===")
 
     headers = {
         "Authorization": f"Bearer {API_KEY}",

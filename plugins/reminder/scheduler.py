@@ -333,7 +333,6 @@ def _find_duplicate_daily(
         if (
             job.chat_type == chat_type
             and job.target_id == target_id
-            and job.message == message
             and job.recurring == "daily"
             and job.daily_time == daily_time
         ):
@@ -461,6 +460,23 @@ def get_reminders(chat_type: str, target_id: str) -> list[ReminderJob]:
 def get_all_reminders() -> list[ReminderJob]:
     """获取所有待触发提醒。"""
     return list(_jobs.values())
+
+
+def clear_reminders(chat_type: str, target_id: str) -> int:
+    """取消指定会话的所有提醒，返回取消数量。"""
+    to_remove = [
+        jid for jid, j in _jobs.items()
+        if j.chat_type == chat_type and j.target_id == target_id
+    ]
+    for jid in to_remove:
+        _jobs.pop(jid, None)
+        task = _tasks.pop(jid, None)
+        if task and not task.done():
+            task.cancel()
+    if to_remove:
+        _save()
+        logger.info(f"已清除 {len(to_remove)} 条提醒 ({chat_type}:{target_id})")
+    return len(to_remove)
 
 
 async def reload_reminders() -> None:

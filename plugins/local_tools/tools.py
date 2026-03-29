@@ -327,8 +327,8 @@ async def set_reminder(
     name="set_daily_reminder",
     description=(
         "当用户要求每天定时提醒时，你必须调用此工具，不能只口头答应。"
-        "触发词：每天X点、每日提醒、定时提醒、每天早上/晚上等。"
         "你没有定时循环能力，只有调用此工具才能实现每日提醒。"
+        "message不要填写生成好的提醒话术，只填事项本身。"
         "只处理用户最新的这条消息中的提醒请求，之前的提醒默认已经设置过。"
     ),
     parameters={
@@ -336,7 +336,7 @@ async def set_reminder(
         "properties": {
             "message": {
                 "type": "string",
-                "description": "要提醒的事项（简短名词/动词），例如: 签到、学英语、锻炼身体、起床。不要填写生成好的提醒话术，只填事项本身。",
+                "description": "要提醒的事项。不要填写生成好的提醒话术，只填事项本身。",
             },
             "time": {
                 "type": "string",
