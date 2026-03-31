@@ -8,6 +8,7 @@ from nonebot import on_fullmatch
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageSegment
 
 from ..persona.manager import clear_history as pm_clear_history
+from ..persona.manager import get_active_persona, _session_path as persona_session_path
 from ..mcp.manager import list_tools_summary
 from ..skill.manager import list_skills_summary
 from ..local_tools.manager import list_tools_summary as local_tools_summary
@@ -26,6 +27,30 @@ async def handle_group_reset(event: GroupMessageEvent):
     group_id = str(event.group_id)
     pm_clear_history(group_id)
     await group_reset.finish("本群对话历史已清除。")
+
+
+# ──────────────────── /compact ────────────────────
+group_compact = on_fullmatch("/compact", priority=10, block=True)
+
+
+@group_compact.handle()
+async def handle_group_compact(event: GroupMessageEvent):
+    if not in_whitelist(event.group_id):
+        return
+    if not is_at_bot(event):
+        return
+    from ..chat.compaction import compact_history
+    from pathlib import Path
+
+    group_id = str(event.group_id)
+    persona = get_active_persona(group_id)
+    session_path = persona_session_path(group_id, persona)
+    memory_path = Path(f"data/sessions/groups/{group_id}/MEMORY.md")
+    compacted = await compact_history(group_id, session_path, memory_path)
+    if compacted:
+        await group_compact.finish("本群对话历史已压缩。")
+    else:
+        await group_compact.finish("当前历史不需要压缩。")
 
 
 # ──────────────────── /help ────────────────────

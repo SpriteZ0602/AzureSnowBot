@@ -104,6 +104,25 @@ async def fetch_quoted_text(bot: Bot, message_id: int) -> str:
         return ""
 
 
+async def fetch_quoted_image_urls(bot: Bot, message_id: int) -> list[str]:
+    """通过 API 获取被引用消息中的图片 URL 列表"""
+    try:
+        msg_data = await bot.get_msg(message_id=message_id)
+        raw_msg = msg_data.get("message", "")
+        if not isinstance(raw_msg, list):
+            return []
+        urls: list[str] = []
+        for seg in raw_msg:
+            if isinstance(seg, dict) and seg.get("type") == "image":
+                url = seg.get("data", {}).get("url", "")
+                if url:
+                    urls.append(url)
+        return urls
+    except Exception as e:
+        logger.warning(f"获取引用图片失败: {e}")
+        return []
+
+
 def in_whitelist(group_id: int) -> bool:
     """检查群是否在白名单中"""
     if not GROUP_WHITELIST:

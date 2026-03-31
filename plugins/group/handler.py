@@ -31,7 +31,7 @@ from ..local_tools.manager import (
 from ..llm import API_KEY as OPENAI_API_KEY, BASE_URL as OPENAI_BASE_URL, MODEL as OPENAI_MODEL
 from .utils import (
     in_whitelist, is_at_bot, extract_text,
-    get_reply_id, fetch_quoted_text, trim_history,
+    get_reply_id, fetch_quoted_text, fetch_quoted_image_urls, trim_history,
 )
 from ..chunker import chunk_text, send_chunked
 
@@ -63,10 +63,12 @@ async def handle_group_chat(event: GroupMessageEvent):
 
     # 检查是否引用了消息
     quoted_text = ""
+    quoted_image_urls: list[str] = []
     reply_id = get_reply_id(event)
     if reply_id:
         bot = get_bot()
         quoted_text = await fetch_quoted_text(bot, reply_id)
+        quoted_image_urls = await fetch_quoted_image_urls(bot, reply_id)
 
     group_id = str(event.group_id)
     sender = event.sender.nickname or str(event.user_id)
@@ -98,17 +100,40 @@ async def handle_group_chat(event: GroupMessageEvent):
 
     # 组装用户消息（带发送者标识 + 引用内容）
     if quoted_text:
-        content = f"[{sender}] (引用了一条消息: \"{quoted_text}\"): {user_input}"
+        content_text = f"[{sender}] (引用了一条消息: \"{quoted_text}\"): {user_input}"
     else:
-        content = f"[{sender}]: {user_input}"
-    user_msg = {"role": "user", "content": content}
+        content_text = f"[{sender}]: {user_input}"
+
+    # 历史记录始终用纯文本
+    user_msg = {"role": "user", "content": content_text}
     append_message(group_id, user_msg, active_persona)
+
+    # 如果引用的消息包含图片，构建多模态 content（仅用于 LLM 请求，不存历史）
+    if quoted_image_urls:
+        multimodal_content: list[dict] = [{"type": "text", "text": content_text}]
+        for img_url in quoted_image_urls:
+            multimodal_content.append({
+                "type": "image_url",
+                "image_url": {"url": img_url},
+            })
+        llm_user_msg = {"role": "user", "content": multimodal_content}
+    else:
+        llm_user_msg = user_msg
 
     # 加载历史并截断
     history = load_history(group_id, active_persona)
     trimmed = trim_history(history, system_prompt)
 
-    messages = [{"role": "system", "content": system_prompt}] + trimmed
+    # 组装 messages：最后一条用 LLM 版本（可能含图片），其余用纯文本
+    messages = [{'role': 'system', 'content': system_prompt}] + trimmed[:-1]
+    if trimmed:
+        # 如果最后一条是刚发的用户消息且有图片，替换为多模态版本
+        if quoted_image_urls and trimmed[-1].get('content') == content_text:
+            messages.append(llm_user_msg)
+        else:
+            messages.append(trimmed[-1])
+    elif quoted_image_urls:
+        messages.append(llm_user_msg)
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",

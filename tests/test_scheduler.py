@@ -225,15 +225,15 @@ class TestDeduplicateDaily:
         result = _find_duplicate_daily("group", "123", "签到", "18:00")
         assert result is None
 
-    def test_different_message_no_dup(self):
-        """同时刻不同事项 → 不重复"""
+    def test_different_message_same_time_is_dup(self):
+        """同时刻不同事项 → 仍视为重复（同一时间只允许一个每日提醒）"""
         job = _make_job(
             message="签到", recurring="daily", daily_time="09:00",
             target_id="123",
         )
         _jobs[job.id] = job
         result = _find_duplicate_daily("group", "123", "喝水", "09:00")
-        assert result is None
+        assert result is not None
 
     def test_oneshot_job_not_matched(self):
         """一次性提醒不应被每日去重匹配"""

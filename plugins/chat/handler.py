@@ -207,6 +207,23 @@ async def handle_reset(event: PrivateMessageEvent):
     await reset.finish("对话历史已清除。")
 
 
+# ──────────────────── 手动压缩指令 ────────────────────
+compact_cmd = on_fullmatch("/compact", priority=10, block=True)
+
+
+@compact_cmd.handle()
+async def handle_compact(event: PrivateMessageEvent):
+    user_id = str(event.user_id)
+    if not ADMIN_NUMBER or user_id != str(ADMIN_NUMBER):
+        return
+    memory_path = ADMIN_DIR / "MEMORY.md"
+    compacted = await compact_history(user_id, _session_path(user_id), memory_path)
+    if compacted:
+        await compact_cmd.finish("对话历史已压缩。")
+    else:
+        await compact_cmd.finish("当前历史不需要压缩。")
+
+
 # ──────────────────── 主对话处理 ────────────────────
 chat = on_message(priority=99, block=False)
 
