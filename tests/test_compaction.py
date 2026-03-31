@@ -65,6 +65,7 @@ _spec.loader.exec_module(_mod)
 
 from plugins.chat.compaction import (
     find_split_point,
+    should_compact,
     _estimate_tokens,
     _estimate_messages_tokens,
     _format_messages_for_summary,
@@ -111,13 +112,8 @@ def _make_large_messages(target_tokens: int) -> list[dict]:
 
 class TestFindSplitPoint:
 
-    def test_below_threshold_returns_zero(self):
-        """token 未达阈值时不压缩"""
-        msgs = _make_messages(5, content_size=20)
-        assert find_split_point(msgs) == 0
-
-    def test_above_threshold_returns_nonzero(self):
-        """token 超过阈值时返回分割点"""
+    def test_short_messages_returns_nonzero(self):
+        """消息足够多时返回分割点"""
         msgs = _make_large_messages(COMPACTION_THRESHOLD + 10000)
         split = find_split_point(msgs)
         assert split > 0
@@ -135,9 +131,24 @@ class TestFindSplitPoint:
 
     def test_too_few_old_returns_zero(self):
         """旧消息少于 4 条时不压缩"""
-        # 制造 3 条旧消息 + 多条尾部的情况
         msgs = _make_messages(3, content_size=20)
         assert find_split_point(msgs) == 0
+
+
+# ──────────────────── should_compact ────────────────────
+
+class TestShouldCompact:
+
+    def test_below_threshold(self):
+        msgs = _make_messages(5, content_size=20)
+        assert should_compact(msgs) is False
+
+    def test_above_threshold(self):
+        msgs = _make_large_messages(COMPACTION_THRESHOLD + 10000)
+        assert should_compact(msgs) is True
+
+    def test_empty(self):
+        assert should_compact([]) is False
 
 
 # ──────────────────── _format_messages_for_summary ────────────────────

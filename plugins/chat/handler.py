@@ -31,7 +31,7 @@ from ..skill.manager import (
     handle_tool_call as skill_handle_tool_call,
 )
 from .proactive import reset_idle_timer, cancel_idle_timer
-from .compaction import compact_history
+from .compaction import compact_history, should_compact
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
@@ -278,10 +278,11 @@ async def handle_chat(event: PrivateMessageEvent):
     history = load_history(user_id)
 
     # Compaction: 如果历史 token 过多，压缩旧消息为摘要 + 提取记忆
-    memory_path = ADMIN_DIR / "MEMORY.md"
-    compacted = await compact_history(user_id, _session_path(user_id), memory_path)
-    if compacted:
-        history = load_history(user_id)  # 重新加载压缩后的历史
+    if should_compact(history):
+        memory_path = ADMIN_DIR / "MEMORY.md"
+        compacted = await compact_history(user_id, _session_path(user_id), memory_path)
+        if compacted:
+            history = load_history(user_id)  # 重新加载压缩后的历史
 
     trimmed = trim_history(history)
 

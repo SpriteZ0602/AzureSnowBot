@@ -97,12 +97,9 @@ def find_split_point(messages: list[dict], tail_ratio: float = TAIL_RATIO) -> in
       - messages[:split_idx] → 旧消息（待压缩）
       - messages[split_idx:] → 保留消息（完整保留）
 
-    返回 0 表示不需要压缩。
+    返回 0 表示消息太少，不值得压缩。
     """
     total_tokens = _estimate_messages_tokens(messages)
-
-    if total_tokens < COMPACTION_THRESHOLD:
-        return 0
 
     # 目标：保留尾部 tail_ratio 的 token
     tail_budget = int(total_tokens * tail_ratio)
@@ -125,6 +122,11 @@ def find_split_point(messages: list[dict], tail_ratio: float = TAIL_RATIO) -> in
         return 0
 
     return tail_start
+
+
+def should_compact(messages: list[dict]) -> bool:
+    """检查对话历史是否超过压缩阈值"""
+    return _estimate_messages_tokens(messages) >= COMPACTION_THRESHOLD
 
 
 # ──────────────────── LLM 调用 ────────────────────
