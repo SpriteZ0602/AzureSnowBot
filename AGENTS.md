@@ -1,7 +1,7 @@
 # AGENTS.md — AzureSnowBot 开发指南
 
 > 本文件供 AI 编码工具（Copilot / Claude / Cursor 等）在新会话中快速理解项目。
-> 最后更新: 2026-03-27
+> 最后更新: 2026-03-31
 
 ---
 
@@ -110,7 +110,7 @@ plugins/
 ├── group/              # 群聊
 │   ├── handler.py      #   对话处理 + Agentic Loop
 │   ├── chatlog.py      #   全量消息记录
-│   ├── commands.py     #   /reset, /help
+│   ├── commands.py     #   /reset, /compact, /help
 │   └── utils.py        #   白名单、工具函数
 ├── persona/            # 人格系统
 │   ├── manager.py      #   人格 CRUD + 会话持久化
@@ -213,6 +213,8 @@ spec.loader.exec_module(mod)
 
 ### 4. 图片理解 / 多模态（优先级：中）
 
+**状态**: 群聊引用消息图片识别已完成（`fetch_quoted_image_urls` + 多模态 content）。私聊 + 直接发送图片尚未支持。
+
 **适用**: 私聊 + 群聊均需要。
 
 **实现方向**:
@@ -229,7 +231,8 @@ spec.loader.exec_module(mod)
 
 ### 6. 主动发言扩展到群聊（优先级：低）
 
-**状态**: Admin 私聊版已完成 (`plugins/chat/proactive.py`)。
+**状态**: Admin 私聊版已完成，合并为心跳机制 (`plugins/chat/proactive.py`)。
+启动时自动开启心跳计时器，HEARTBEAT.md 文件驱动，带完整工具链。
 
 **推荐重构**: 提升为 `plugins/proactive.py`（根级模块），抽象为引擎 + 回调模式：
 

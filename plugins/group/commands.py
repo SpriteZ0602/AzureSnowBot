@@ -63,6 +63,7 @@ HELP_TEXT = """/persona — 列出所有人格
 /skill — 列出所有技能
 /skill <名称> — 查看技能详情
 /skill reload — 重新扫描技能
+/compact — 压缩对话历史
 /reset — 清除当前对话历史
 /help — 显示本帮助"""
 

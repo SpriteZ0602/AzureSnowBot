@@ -1,6 +1,6 @@
 # AzureSnowBot
 
-基于 NapCat + NoneBot2 的 QQ 智能 Agent Bot。支持多轮对话、人格切换、MCP 工具调用、渐进式披露 Skill 系统、本地工具注册、仿真人分条发送。
+基于 NapCat + NoneBot2 的 QQ 智能 Agent Bot。支持多轮对话、人格切换、MCP 工具调用、渐进式披露 Skill 系统、本地工具注册、对话压缩、仿真人分条发送。
 
 ## 功能
 
@@ -20,6 +20,7 @@
 | @Bot `/skill` | 列出所有已加载技能 |
 | @Bot `/skill <名称>` | 查看技能详情 |
 | @Bot `/skill reload` | 重新扫描技能目录 |
+| @Bot `/compact` | 压缩对话历史（手动触发） |
 | @Bot `/help` | 显示帮助信息 |
 
 ### 私聊（仅 Admin）
@@ -30,6 +31,7 @@
 |------|------|
 | 任意消息 | 调用 LLM 进行多轮对话（支持引用消息 + 完整工具链） |
 | `/reset` | 清空对话历史 |
+| `/compact` | 压缩对话历史（手动触发压缩 + 记忆提取） |
 | `ping` | 回复 `pong~`，检测 Bot 是否在线 |
 
 ### 人格系统
@@ -196,7 +198,7 @@ AzureSnowBot/
 │   ├── group/                     #   群聊对话
 │   │   ├── handler.py             #     消息处理 + Agentic Loop
 │   │   ├── chatlog.py             #     全量群聊记录（旁路存储）
-│   │   ├── commands.py            #     /reset, /help
+│   │   ├── commands.py            #     /reset, /compact, /help
 │   │   └── utils.py               #     白名单、工具函数
 │   ├── persona/                   #   人格管理
 │   │   ├── manager.py             #     人格增删查改 + 会话持久化
@@ -327,7 +329,8 @@ data/admin/
 ├── SOUL.md             # 人格设定（必需）
 ├── AGENTS.md           # 操作手册（可选）
 ├── USER.md             # 用户档案（可选）
-└── MEMORY.md           # 长期记忆（可选）
+├── MEMORY.md           # 长期记忆（可选）
+└── HEARTBEAT.md        # 心跳任务清单（可选）
 ```
 
 每次对话时动态读取，修改后立即生效，无需重启。
@@ -443,5 +446,6 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] Admin 文件系统工具（read_file / write_file / list_files，仅私聊）
 - [ ] 长期记忆 RAG（Embedding 语义搜索）
 - [ ] 电脑操控工具 & Skill（仅 Admin 私聊）
-- [ ] 图片理解 / 多模态（私聊 + 群聊）
+- [x] 群聊引用消息图片识别（多模态）
+- [ ] 图片理解 / 多模态（直接发送图片，私聊 + 群聊）
 - [ ] 各类 Skill 扩展
