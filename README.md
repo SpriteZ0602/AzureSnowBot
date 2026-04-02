@@ -109,6 +109,7 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 | `get_group_chat_log` | 检索群聊历史消息（按昵称/QQ号/关键词/时间筛选） |
 | `memory_search` | 语义搜索长期记忆和历史对话（仅 Admin 私聊，Embedding + BM25 混合搜索） |
 | `run_sub_agent` | 启动独立 Sub-Agent 执行任务（隔离上下文，带工具链） |
+| `run_command` | 执行本地 shell 命令（仅 Admin 私聊，超时 30s） |
 
 添加新工具只需在 `plugins/local_tools/tools.py` 中编写函数并加上 `@register_tool` 装饰器，重启即可。
 
@@ -455,7 +456,7 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] 群聊记录检索工具（get_group_chat_log）
 - [x] Sub-Agent 编排（独立 LLM 调用 + 工具链 + 上下文隔离）
 - [x] /取名 群聊起名功能
-- [ ] 电脑操控工具 & Skill（仅 Admin 私聊）
+- [x] 电脑操控工具（run_command，仅 Admin 私聊）
 - [x] 群聊引用消息图片识别（多模态）
 - [ ] 图片理解 / 多模态（直接发送图片，私聊 + 群聊）
 - [ ] 各类 Skill 扩展

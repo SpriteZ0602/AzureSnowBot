@@ -42,6 +42,9 @@ from nonebot.log import logger
 SKILLS_DIR = Path("data/skills")
 SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
+ADMIN_SKILLS_DIR = Path("data/admin_skills")
+ADMIN_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # ──────────────────── 数据结构 ────────────────────
 
@@ -52,6 +55,7 @@ class SkillMeta:
     description: str
     path: Path                              # SKILL.md 所在目录
     references: list[str] = field(default_factory=list)  # references/ 中的文件名
+    admin_only: bool = False                # 是否仅 Admin 私聊可见
 
 
 # ──────────────────── 全局状态 ────────────────────
@@ -90,46 +94,55 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
 
 def scan_skills() -> None:
     """
-    扫描 data/skills/ 下所有技能目录，解析 SKILL.md 的 frontmatter
-    构建技能目录 (Level 1 catalog)。
+    扫描 data/skills/ 和 data/admin_skills/ 下所有技能目录，
+    解析 SKILL.md 的 frontmatter 构建技能目录 (Level 1 catalog)。
+    admin_skills/ 下的技能标记为 admin_only=True。
     """
     _catalog.clear()
-    if not SKILLS_DIR.exists():
-        return
 
-    for skill_dir in sorted(SKILLS_DIR.iterdir()):
-        if not skill_dir.is_dir():
-            continue
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            logger.warning(f"Skill 目录 {skill_dir.name} 缺少 SKILL.md，跳过")
-            continue
+    scan_dirs = [
+        (SKILLS_DIR, False),
+        (ADMIN_SKILLS_DIR, True),
+    ]
 
-        try:
-            content = skill_md.read_text(encoding="utf-8")
-            meta, _ = _parse_frontmatter(content)
-            name = meta.get("name", skill_dir.name)
-            description = meta.get("description", "")
-            if not description:
-                logger.warning(f"Skill {name} 没有 description，跳过")
+    for skills_dir, is_admin in scan_dirs:
+        if not skills_dir.exists():
+            continue
+        for skill_dir in sorted(skills_dir.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                logger.warning(f"Skill 目录 {skill_dir.name} 缺少 SKILL.md，跳过")
                 continue
 
-            # 扫描 references/
-            refs_dir = skill_dir / "references"
-            refs = []
-            if refs_dir.is_dir():
-                refs = sorted(f.name for f in refs_dir.iterdir() if f.is_file())
+            try:
+                content = skill_md.read_text(encoding="utf-8")
+                meta, _ = _parse_frontmatter(content)
+                name = meta.get("name", skill_dir.name)
+                description = meta.get("description", "")
+                if not description:
+                    logger.warning(f"Skill {name} 没有 description，跳过")
+                    continue
 
-            _catalog[name] = SkillMeta(
-                name=name,
-                description=description,
-                path=skill_dir,
-                references=refs,
-            )
-            ref_info = f"，references: {refs}" if refs else ""
-            logger.info(f"已加载 Skill: {name} — {description[:50]}...{ref_info}")
-        except Exception as e:
-            logger.error(f"解析 Skill {skill_dir.name} 失败: {e}")
+                # 扫描 references/
+                refs_dir = skill_dir / "references"
+                refs = []
+                if refs_dir.is_dir():
+                    refs = sorted(f.name for f in refs_dir.iterdir() if f.is_file())
+
+                _catalog[name] = SkillMeta(
+                    name=name,
+                    description=description,
+                    path=skill_dir,
+                    references=refs,
+                    admin_only=is_admin,
+                )
+                admin_tag = " [admin]" if is_admin else ""
+                ref_info = f"，references: {refs}" if refs else ""
+                logger.info(f"已加载 Skill: {name}{admin_tag} — {description[:50]}...{ref_info}")
+            except Exception as e:
+                logger.error(f"解析 Skill {skill_dir.name} 失败: {e}")
 
     logger.info(f"共加载 {len(_catalog)} 个 Skill")
 
@@ -151,13 +164,19 @@ def get_skill_meta(name: str) -> SkillMeta | None:
     return _catalog.get(name)
 
 
-def build_catalog_prompt() -> str:
+def build_catalog_prompt(*, chat_type: str = "private") -> str:
     """
     构建技能目录提示词，注入到 system prompt 中。
     这是 Level 1 — LLM 始终看到所有技能的 name + description。
     如果没有技能，返回空字符串。
+    chat_type="group" 时过滤掉 admin_only 技能。
     """
-    if not _catalog:
+    visible = {
+        name: meta for name, meta in _catalog.items()
+        if not meta.admin_only or chat_type == "private"
+    }
+
+    if not visible:
         return ""
 
     lines = [
@@ -166,7 +185,7 @@ def build_catalog_prompt() -> str:
         "使用 load_skill 工具加载该技能的完整指令后再回答。",
         "",
     ]
-    for name, meta in sorted(_catalog.items()):
+    for name, meta in sorted(visible.items()):
         ref_hint = ""
         if meta.references:
             ref_hint = f" (附带参考文档: {', '.join(meta.references)})"

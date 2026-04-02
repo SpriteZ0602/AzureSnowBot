@@ -192,15 +192,13 @@ spec.loader.exec_module(mod)
 - `group_id` 从 `kwargs["_target_id"]` 获取（handler 自动传入的工具上下文）
 - **注意**: `tools.py` 中不需要 `import time`，`load_chatlog()` 内部自己处理时间过滤
 
-### 2. 电脑操控工具 & Skill（优先级：高，仅 Admin 私聊）
+### 2. 电脑操控工具（已完成，仅 Admin 私聊）
 
-**目标**: Admin 私聊中 Bot 可以操控本地电脑（文件读写、命令执行、浏览器等）。
-
-**实现方向**:
-- 在 `plugins/local_tools/tools.py` 或新文件中添加系统操作工具（如 `run_command`, `read_file`, `write_file`）
-- 安全约束：仅 Admin 私聊可触发（handler 已通过 `_tool_context["_chat_type"]` 传入上下文，工具内部可校验）
-- 配套 Skill：在 `data/skills/` 中添加指导 LLM 如何安全操作电脑的 Skill
-- `runtime_context.py` 已为私聊注入完整环境信息（OS、Shell、Workspace、Git），群聊不注入这些
+**已实现**:
+- `run_command` — 执行本地 shell 命令（PowerShell/sh），超时 30s，输出截断 4000 字符
+- `read_file` / `write_file` / `list_files` — 文件系统操作（白名单目录限制）
+- 安全约束：所有工具均 `admin_only=True`，群聊 LLM 不可见
+- `runtime_context.py` 为私聊注入完整环境信息（OS、Shell、Workspace、Git）
 
 ### 3. 长期记忆 RAG（优先级：高）
 

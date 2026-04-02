@@ -115,13 +115,16 @@ def skill_env(tmp_path):
     """搭建临时技能目录"""
     sm = _sm
     original_dir = sm.SKILLS_DIR
+    original_admin_dir = sm.ADMIN_SKILLS_DIR
     sm.SKILLS_DIR = tmp_path / "skills"
     sm.SKILLS_DIR.mkdir()
+    sm.ADMIN_SKILLS_DIR = tmp_path / "admin_skills"
     sm._catalog.clear()
 
     yield sm, sm.SKILLS_DIR
 
     sm.SKILLS_DIR = original_dir
+    sm.ADMIN_SKILLS_DIR = original_admin_dir
     sm._catalog.clear()
 
 

@@ -203,6 +203,93 @@ async def list_files_tool(
 
 
 # ──────────────────────────────────────────────────────
+# 命令执行工具（仅 Admin 私聊可用）
+# ──────────────────────────────────────────────────────
+
+@register_tool(
+    name="run_command",
+    description=(
+        "在本地电脑上执行 shell 命令并返回输出。"
+        "用途：运行脚本、查看系统状态、执行 git 操作、安装包等。"
+        "重要：执行前必须先告诉用户你要执行什么命令，等用户确认后再调用。"
+        "注意：超时 30 秒。"
+    ),
+    admin_only=True,
+    parameters={
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "要执行的 shell 命令，例如: dir, git status, python --version",
+            },
+            "timeout": {
+                "type": "integer",
+                "description": "超时秒数，默认 30，最大 120",
+            },
+        },
+        "required": ["command"],
+    },
+)
+async def run_command_tool(
+    command: str = "",
+    timeout: int = 30,
+    _context: dict | None = None,
+    **kwargs,
+) -> str:
+    import asyncio
+    import platform
+
+    err = _check_admin_only(_context)
+    if err:
+        return err
+    if not command:
+        return "[错误] 请提供要执行的命令"
+
+    timeout = max(1, min(120, timeout))
+
+    # Windows 用 powershell，其他用 sh
+    if platform.system() == "Windows":
+        shell_cmd = ["powershell", "-NoProfile", "-Command", command]
+    else:
+        shell_cmd = ["sh", "-c", command]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *shell_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout
+        )
+
+        output_parts: list[str] = []
+        if stdout:
+            out = stdout.decode("utf-8", errors="replace").strip()
+            if out:
+                output_parts.append(out)
+        if stderr:
+            err_text = stderr.decode("utf-8", errors="replace").strip()
+            if err_text:
+                output_parts.append(f"[stderr]\n{err_text}")
+
+        result = "\n".join(output_parts) if output_parts else "(无输出)"
+
+        # 截断过长输出
+        if len(result) > 4000:
+            result = result[:4000] + f"\n...(输出被截断，共 {len(result)} 字符)"
+
+        exit_code = proc.returncode
+        return f"[exit {exit_code}]\n{result}"
+
+    except asyncio.TimeoutError:
+        proc.kill()
+        return f"[错误] 命令执行超时（{timeout}秒）"
+    except Exception as e:
+        return f"[错误] 命令执行失败: {e}"
+
+
+# ──────────────────────────────────────────────────────
 # Sub-Agent（独立 LLM 调用，隔离上下文，带完整工具链）
 # ──────────────────────────────────────────────────────
 

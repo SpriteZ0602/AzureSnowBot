@@ -81,7 +81,7 @@ async def handle_group_chat(event: GroupMessageEvent):
         return
 
     # 注入 Skill 目录（Level 1 渐进式披露）
-    skill_catalog = skill_catalog_prompt()
+    skill_catalog = skill_catalog_prompt(chat_type="group")
     if skill_catalog:
         system_prompt += "\n" + skill_catalog
 
