@@ -449,3 +449,156 @@ async def do_list_reminders(
             lines.append(f"  [{j.id}] ⏰ {j.message} — {time_str}（{fire_at.strftime('%H:%M:%S')}）by {j.creator_name}")
 
     return f"待触发提醒 ({len(jobs)} 条):\n" + "\n".join(lines)
+
+
+# ──────────────────────────────────────────────────────
+# 群聊记录检索工具
+# ──────────────────────────────────────────────────────
+
+@register_tool(
+    name="get_group_chat_log",
+    description=(
+        "检索当前群聊的历史消息记录。可按发送者昵称、QQ号、关键词、时间范围筛选。"
+        "用途：查看某人最近说了什么、总结群聊内容、回顾讨论等。"
+        "注意：只能在群聊中使用，返回的是群内所有人的消息（不仅限@Bot的）。"
+        "当用户@了某人时，你会收到该用户的QQ号，请用 user_id 参数检索。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "user_name": {
+                "type": "string",
+                "description": "按发送者昵称筛选（模糊匹配），例如: 小明",
+            },
+            "user_id": {
+                "type": "string",
+                "description": "按发送者QQ号筛选（精确匹配）。当用户@了某人时使用这个参数",
+            },
+            "keyword": {
+                "type": "string",
+                "description": "按消息内容关键词筛选，例如: 晚饭",
+            },
+            "hours": {
+                "type": "number",
+                "description": "查看最近多少小时的记录，默认 24",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "最多返回条数，默认 50",
+            },
+        },
+    },
+)
+async def get_group_chat_log(
+    user_name: str = "",
+    user_id: str = "",
+    keyword: str = "",
+    hours: float = 24,
+    limit: int = 50,
+    _context: dict | None = None,
+    **kwargs,
+) -> str:
+    if not _context or _context.get("_chat_type") != "group":
+        return "[错误] 此工具仅限群聊使用"
+
+    group_id = _context.get("_target_id", "")
+    if not group_id:
+        return "[错误] 无法获取群号"
+
+    from ..group.chatlog import load_chatlog
+
+    entries = load_chatlog(
+        group_id,
+        hours=hours,
+        user_name=user_name or None,
+        user_id=user_id or None,
+        keyword=keyword or None,
+        limit=limit,
+    )
+
+    if not entries:
+        parts = []
+        if user_name:
+            parts.append(f"发送者含「{user_name}」")
+        if keyword:
+            parts.append(f"内容含「{keyword}」")
+        parts.append(f"最近 {hours} 小时")
+        return f"未找到匹配的消息记录（{', '.join(parts)}）"
+
+    lines: list[str] = []
+    for e in entries:
+        ts = datetime.fromtimestamp(e["ts"]).strftime("%m-%d %H:%M")
+        name = e.get("name", "未知")
+        text = e.get("text", "")
+        lines.append(f"[{ts}] {name}: {text}")
+
+    header = f"群聊记录（{len(entries)} 条"
+    if user_name:
+        header += f", 发送者含「{user_name}」"
+    if keyword:
+        header += f", 内容含「{keyword}」"
+    header += f", 最近 {hours}h）:"
+
+    return header + "\n" + "\n".join(lines)
+
+
+# ──────────────────────────────────────────────────────
+# 记忆语义搜索工具（仅 Admin 私聊）
+# ──────────────────────────────────────────────────────
+
+@register_tool(
+    name="memory_search",
+    description=(
+        "语义搜索长期记忆和历史对话。"
+        "当需要回忆之前聊过的内容、查找用户偏好、回顾过去的决定或约定时使用。"
+        "返回最相关的记忆片段及其来源。"
+    ),
+    admin_only=True,
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "搜索内容，用自然语言描述要找什么，例如: 碧碧喜欢什么、上次讨论的架构方案",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "最多返回几条结果，默认 5",
+            },
+        },
+        "required": ["query"],
+    },
+)
+async def memory_search_tool(
+    query: str = "",
+    max_results: int = 5,
+    _context: dict | None = None,
+    **kwargs,
+) -> str:
+    err = _check_admin_only(_context)
+    if err:
+        return err
+    if not query:
+        return "[错误] 请提供搜索内容"
+
+    from ..memory.indexer import search
+
+    try:
+        results = await search(query, max_results=max_results)
+    except Exception as e:
+        return f"[错误] 记忆搜索失败: {e}"
+
+    if not results:
+        return f"未找到与「{query}」相关的记忆"
+
+    lines: list[str] = []
+    for r in results:
+        source = Path(r["source"]).name
+        score = r["score"]
+        text = r["text"]
+        # 截断过长的片段
+        if len(text) > 500:
+            text = text[:500] + "..."
+        lines.append(f"[{source} L{r['start_line']}-{r['end_line']}] (相关度 {score})\n{text}")
+
+    return f"记忆搜索结果（{len(results)} 条，查询: {query}）:\n\n" + "\n\n".join(lines)

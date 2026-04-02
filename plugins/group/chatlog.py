@@ -54,6 +54,7 @@ def load_chatlog(
     *,
     hours: float = 24,
     user_name: str | None = None,
+    user_id: str | None = None,
     keyword: str | None = None,
     limit: int = 200,
 ) -> list[dict]:
@@ -64,6 +65,7 @@ def load_chatlog(
         group_id:  群号
         hours:     只返回最近 N 小时的记录（默认24）
         user_name: 按发送者昵称模糊过滤（可选）
+        user_id:   按发送者 QQ 号精确过滤（可选）
         keyword:   按消息内容关键词过滤（可选）
         limit:     最多返回条数（默认200）
     """
@@ -87,8 +89,12 @@ def load_chatlog(
         if entry.get("ts", 0) < cutoff:
             continue
 
-        # 发送者过滤（模糊匹配）
+        # 发送者过滤（昵称模糊匹配）
         if user_name and user_name.lower() not in entry.get("name", "").lower():
+            continue
+
+        # 发送者过滤（QQ 号精确匹配）
+        if user_id and entry.get("uid", "") != user_id:
             continue
 
         # 关键词过滤
