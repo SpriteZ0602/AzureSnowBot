@@ -56,7 +56,7 @@ async def handle_group_compact(event: GroupMessageEvent):
 
 
 # ──────────────────── /取名 ────────────────────
-nickname_cmd = on_message(priority=9, block=True)
+nickname_cmd = on_message(priority=9, block=False)
 
 _NICKNAME_TASK = (
     "你是一个取名专家。根据下面的群聊记录，给这个人起 2-3 个有趣的群昵称。"
