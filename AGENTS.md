@@ -110,7 +110,7 @@ plugins/
 ├── group/              # 群聊
 │   ├── handler.py      #   对话处理 + Agentic Loop
 │   ├── chatlog.py      #   全量消息记录
-│   ├── commands.py     #   /reset, /compact, /help
+│   ├── commands.py     #   /reset, /compact, /取名, /help
 │   └── utils.py        #   白名单、工具函数
 ├── persona/            # 人格系统
 │   ├── manager.py      #   人格 CRUD + 会话持久化
@@ -126,6 +126,8 @@ plugins/
 │   └── scheduler.py    #   asyncio 调度 + JSON 持久化
 └── mcp/                # MCP 工具
     └── manager.py      #   MCP 服务器连接 + 工具调用
+├── memory/             # 记忆向量索引
+│   └── indexer.py      #   Embedding + BM25 混合搜索 + MMR + 时间衰减
 ```
 
 ## 测试约定

@@ -190,3 +190,62 @@ class TestCurrentTime:
     async def test_includes_weekday(self):
         result = await current_time()
         assert "星期" in result
+
+
+# ──────────────────── Sub-Agent ────────────────────
+
+from plugins.local_tools.tools import run_sub_agent
+from unittest.mock import AsyncMock, patch
+
+
+class TestRunSubAgent:
+    """Sub-Agent 独立 LLM 调用"""
+
+    @pytest.mark.asyncio
+    async def test_missing_task(self):
+        result = await run_sub_agent(task="", data="some data")
+        assert "错误" in result
+
+    @pytest.mark.asyncio
+    async def test_missing_data(self):
+        result = await run_sub_agent(task="你是专家", data="")
+        assert "错误" in result
+
+    @pytest.mark.asyncio
+    async def test_successful_call(self):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": "这个人可以叫水群大王"}}]
+        }
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await run_sub_agent(
+                task="你是取名专家",
+                data="[小明]: 今天又水群了\n[小明]: 哈哈哈",
+            )
+
+        assert "水群大王" in result
+        # 验证调用参数：messages 只有 system + user，没有对话历史
+        call_args = mock_client.post.call_args
+        payload = call_args.kwargs.get("json") or call_args[1].get("json")
+        messages = payload["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_api_failure(self):
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(side_effect=Exception("网络错误"))
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await run_sub_agent(task="专家", data="数据")
+
+        assert "失败" in result

@@ -21,6 +21,7 @@
 | @Bot `/skill <名称>` | 查看技能详情 |
 | @Bot `/skill reload` | 重新扫描技能目录 |
 | @Bot `/compact` | 压缩对话历史（手动触发） |
+| @Bot `/取名 @某人 [条数]` | 根据聊天记录起群昵称（Sub-Agent） |
 | @Bot `/help` | 显示帮助信息 |
 
 ### 私聊（仅 Admin）
@@ -105,6 +106,9 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 | `list_files` | 列出目录文件（仅 Admin 私聊，限 data/ 目录） |
 | `cancel_reminder` | 取消已设置的提醒（一次性/每日） |
 | `list_reminders` | 查看当前对话的待触发提醒 |
+| `get_group_chat_log` | 检索群聊历史消息（按昵称/QQ号/关键词/时间筛选） |
+| `memory_search` | 语义搜索长期记忆和历史对话（仅 Admin 私聊，Embedding + BM25 混合搜索） |
+| `run_sub_agent` | 启动独立 Sub-Agent 执行任务（隔离上下文，带工具链） |
 
 添加新工具只需在 `plugins/local_tools/tools.py` 中编写函数并加上 `@register_tool` 装饰器，重启即可。
 
@@ -214,6 +218,8 @@ AzureSnowBot/
 │   │   └── scheduler.py           #     asyncio 定时任务 + JSON 持久化
 │   └── mcp/                       #   MCP 工具集成
 │       └── manager.py             #     MCP 服务器连接 + 工具调用
+│   └── memory/                    #   记忆向量索引
+│       └── indexer.py             #     Embedding + BM25 混合搜索 + MMR + 时间衰减
 ├── data/
 │   ├── mcp_servers.json           # MCP 服务器配置
 │   ├── skills/                    # Skill 技能目录
@@ -250,6 +256,7 @@ AzureSnowBot/
 │   ├── test_compaction.py
 │   ├── test_file_tools.py
 │   ├── test_local_tools_manager.py
+│   ├── test_memory_indexer.py
 │   ├── test_runtime_context.py
 │   ├── test_proactive.py
 │   ├── test_scheduler.py
@@ -444,7 +451,10 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] 对话压缩（Compaction + 记忆提取）
 - [x] 心跳机制（HEARTBEAT.md 文件驱动 + 完整工具链）
 - [x] Admin 文件系统工具（read_file / write_file / list_files，仅私聊）
-- [ ] 长期记忆 RAG（Embedding 语义搜索）
+- [x] 长期记忆 RAG（Embedding + BM25 混合搜索 + MMR + 时间衰减）
+- [x] 群聊记录检索工具（get_group_chat_log）
+- [x] Sub-Agent 编排（独立 LLM 调用 + 工具链 + 上下文隔离）
+- [x] /取名 群聊起名功能
 - [ ] 电脑操控工具 & Skill（仅 Admin 私聊）
 - [x] 群聊引用消息图片识别（多模态）
 - [ ] 图片理解 / 多模态（直接发送图片，私聊 + 群聊）
