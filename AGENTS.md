@@ -100,6 +100,8 @@ data/
 plugins/
 ├── llm.py              # LLM 配置中心
 ├── runtime_context.py  # 运行时上下文（时间、Runtime、渠道、工具摘要）
+├── token_stats.py      # Token 用量统计 + 费用估算
+├── tool_log.py         # 工具调用日志（JSONL 持久化）
 ├── chunker.py          # 分条发送
 ├── ping.py             # 存活检测
 ├── __init__.py          # 空文件

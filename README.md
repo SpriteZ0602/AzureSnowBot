@@ -110,6 +110,7 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 | `memory_search` | 语义搜索长期记忆和历史对话（仅 Admin 私聊，Embedding + BM25 混合搜索） |
 | `run_sub_agent` | 启动独立 Sub-Agent 执行任务（隔离上下文，带工具链） |
 | `run_command` | 执行本地 shell 命令（仅 Admin 私聊，超时 30s） |
+| `get_token_stats` | 查看当日 Token 用量统计和预估费用（仅 Admin 私聊） |
 
 添加新工具只需在 `plugins/local_tools/tools.py` 中编写函数并加上 `@register_tool` 装饰器，重启即可。
 
@@ -153,6 +154,7 @@ Admin 私聊对话历史超过 token 阈值时自动压缩：
 - 保留最近 40% 的消息完整，旧消息调用 LLM 生成摘要
 - 压缩时自动提取重要信息写入 `MEMORY.md`（用户偏好、决定、承诺等）
 - 压缩后 `history.jsonl` 被重写为 `[摘要消息] + [保留消息]`
+- 压缩完成后自动刷新记忆向量索引，确保 `memory_search` 可检索最新内容
 
 ### Skill 技能系统（渐进式披露）
 
@@ -195,6 +197,8 @@ AzureSnowBot/
 │   ├── llm.py                     #   LLM 统一配置（多 Provider 切换）
 │   ├── runtime_context.py         #   运行时上下文（时间、环境、渠道、工具摘要）
 │   ├── ping.py                    #   存活检测
+│   ├── token_stats.py             #   Token 用量统计 + JSON 持久化
+│   ├── tool_log.py                #   工具调用日志（JSONL 格式）
 │   ├── chunker.py                 #   消息分条发送 + 人类节奏模拟
 │   ├── chat/                      #   私聊对话（仅 Admin）
 │   │   ├── handler.py             #     消息处理 + Agentic Loop
@@ -223,11 +227,13 @@ AzureSnowBot/
 │       └── indexer.py             #     Embedding + BM25 混合搜索 + MMR + 时间衰减
 ├── data/
 │   ├── mcp_servers.json           # MCP 服务器配置
-│   ├── skills/                    # Skill 技能目录
+│   ├── skills/                    # Skill 技能目录（共享）
 │   │   ├── web-search/            #   网络搜索技能
 │   │   ├── translator/            #   翻译技能
 │   │   ├── code-reviewer/         #   代码审查技能 (+ references/)
 │   │   └── moegirl-wiki/          #   萌娘百科查询技能
+│   ├── admin_skills/              # Admin 专用 Skill（仅私聊可见）
+│   │   └── python-coder/          #   Python 编程技能
 │   ├── personas/                  # 通用人格 prompt 文件
 │   │   ├── _base.txt              #   共享基础指令（自动追加到所有人格）
 │   │   ├── default.txt            #   默认人格
@@ -241,6 +247,8 @@ AzureSnowBot/
 │   │   ├── USER.md                #   用户档案
 │   │   ├── MEMORY.md              #   长期记忆
 │   │   ├── HEARTBEAT.md           #   心跳任务清单
+│   │   ├── token_stats.json       #   Token 用量统计数据
+│   │   ├── tool_calls.jsonl       #   工具调用日志
 │   │   ├── config.json            #   {"last_message_at": "..."}
 │   │   └── history.jsonl          #   对话历史
 │   ├── sessions/groups/           # 群聊会话
@@ -456,6 +464,9 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] 群聊记录检索工具（get_group_chat_log）
 - [x] Sub-Agent 编排（独立 LLM 调用 + 工具链 + 上下文隔离）
 - [x] /取名 群聊起名功能
+- [x] Token 用量统计 + 费用估算
+- [x] 工具调用日志持久化
+- [x] Admin 专用 Skill 目录（admin_skills/）
 - [x] 电脑操控工具（run_command，仅 Admin 私聊）
 - [x] 群聊引用消息图片识别（多模态）
 - [ ] 图片理解 / 多模态（直接发送图片，私聊 + 群聊）
