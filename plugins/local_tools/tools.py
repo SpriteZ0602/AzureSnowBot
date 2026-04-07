@@ -839,32 +839,51 @@ async def web_read_tool(url: str = "", **kwargs) -> str:
 )
 async def web_search_tool(query: str = "", num_results: int = 5, **kwargs) -> str:
     import httpx as _httpx
+    import re as _re
 
     if not query:
         return "[错误] 请提供搜索关键词"
 
     num_results = max(1, min(10, num_results))
 
-    # 使用 Jina Search API
+    # 使用 DuckDuckGo HTML 搜索（免费，无需 API key）
     try:
         async with _httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.get(
-                f"https://s.jina.ai/{query}",
-                headers={"Accept": "application/json"},
+                "https://html.duckduckgo.com/html/",
+                params={"q": query},
+                headers={"User-Agent": "Mozilla/5.0"},
             )
             resp.raise_for_status()
-            data = resp.json()
+            html = resp.text
 
-            results = data.get("data", [])[:num_results]
+            # 从 HTML 中提取搜索结果
+            results: list[dict] = []
+            # 匹配结果块：<a class="result__a" href="...">title</a> + <a class="result__snippet">desc</a>
+            result_blocks = _re.findall(
+                r'class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
+                r'class="result__snippet"[^>]*>(.*?)</(?:a|span)',
+                html, _re.DOTALL,
+            )
+
+            for href, raw_title, raw_desc in result_blocks[:num_results]:
+                title = _re.sub(r"<[^>]+>", "", raw_title).strip()
+                desc = _re.sub(r"<[^>]+>", "", raw_desc).strip()
+                # DuckDuckGo 的 href 是重定向 URL，提取真实 URL
+                url_match = _re.search(r"uddg=([^&]+)", href)
+                if url_match:
+                    from urllib.parse import unquote
+                    url = unquote(url_match.group(1))
+                else:
+                    url = href
+                results.append({"title": title, "url": url, "desc": desc})
+
             if not results:
                 return f"未找到与「{query}」相关的搜索结果"
 
             lines: list[str] = []
             for i, item in enumerate(results, 1):
-                title = item.get("title", "无标题")
-                url = item.get("url", "")
-                desc = item.get("description", item.get("content", ""))[:200]
-                lines.append(f"{i}. {title}\n   {url}\n   {desc}")
+                lines.append(f"{i}. {item['title']}\n   {item['url']}\n   {item['desc'][:200]}")
 
             return f"搜索结果（{query}，{len(results)} 条）:\n\n" + "\n\n".join(lines)
     except Exception as e:

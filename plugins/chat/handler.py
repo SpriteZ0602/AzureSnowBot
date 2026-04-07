@@ -374,11 +374,18 @@ async def handle_chat(event: PrivateMessageEvent):
                     "content": tool_result,
                 })
 
-        # 超过最大轮次
-        reply = "（工具调用轮次已达上限，请重新提问）"
-        append_message(user_id, {"role": "assistant", "content": reply})
-        bot = get_bot()
-        await send_chunked(bot, event, [reply], reply_first=False)
+        # 超过最大轮次 — 不带工具再调一次，让 LLM 根据已有信息总结回复
+        messages.append({"role": "user", "content": "你已经无法再调用工具了，请根据上面已经获取到的信息，直接回答用户的问题。"})
+        try:
+            final_data = await call_llm(messages, source="chat")
+            reply = (final_data["choices"][0]["message"].get("content") or "").strip()
+        except Exception:
+            reply = "（工具调用轮次已达上限，请重新提问）"
+        if reply:
+            append_message(user_id, {"role": "assistant", "content": reply})
+            bot = get_bot()
+            chunks = chunk_text(reply)
+            await send_chunked(bot, event, chunks, reply_first=False)
         reset_idle_timer()
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
@@ -386,5 +393,5 @@ async def handle_chat(event: PrivateMessageEvent):
     except FinishedException:
         raise
     except Exception as e:
-        logger.error(f"ChatGPT 插件异常: {e}")
+        logger.error(f"插件异常: {e}")
         await chat.finish("请求出错，请稍后再试。")
