@@ -1,7 +1,7 @@
 # AGENTS.md — AzureSnowBot 开发指南
 
 > 本文件供 AI 编码工具（Copilot / Claude / Cursor 等）在新会话中快速理解项目。
-> 最后更新: 2026-03-31
+> 最后更新: 2026-04-07
 
 ---
 
@@ -9,7 +9,7 @@
 
 基于 **NapCat + NoneBot2** 的 QQ 智能 Agent Bot。Python 3.14，Conda 环境 `QQBot`（`D:\Anaconda\envs\QQBot`）。
 
-核心能力：多轮对话、人格系统、MCP/本地工具调用、Skill 渐进式披露、定时提醒、心跳 + 主动发言、对话压缩（Compaction）、记忆管理。
+核心能力：多轮对话、人格系统、MCP/本地工具调用、Skill 渐进式披露、定时提醒、心跳 + 主动发言、对话压缩（Compaction）、记忆管理、Web Dashboard。
 
 ## 技术栈
 
@@ -19,6 +19,9 @@
 | NapCat Shell | QQ 无头 Bot，在 `vendor/NapCat.Shell/` |
 | LLM | Gemini / OpenAI / Qwen 三选一，统一走 OpenAI 兼容接口 |
 | httpx | 所有 LLM 调用都手写 httpx，**没用 openai SDK** |
+| FastAPI | Web Dashboard 后端 API，挂载到 NoneBot2 的 ASGI server |
+| Vue 3 + Vite + Element Plus | Web Dashboard 前端 SPA |
+| PyJWT + bcrypt | Dashboard JWT 认证 |
 | pytest + pytest-asyncio | 测试框架，`asyncio_mode = auto` |
 
 ## 关键架构决策
@@ -82,6 +85,35 @@ data/
 └── reminders.json
 ```
 
+### Web Dashboard
+
+FastAPI 子应用挂载到 NoneBot2 的 ASGI server（共享进程，直接调用现有插件函数读数据）：
+
+- 后端 REST API：`/api/v1/*`，JWT 认证保护
+- 前端 Vue SPA：生产模式 `/dashboard/`，开发模式 `localhost:5173`
+- 挂载时机：`driver.on_startup` → `driver.server_app.mount("/api/v1", dashboard_app)`
+
+**Dashboard 页面：**
+| 页面 | API 前缀 | 說明 |
+|------|----------|------|
+| 总览 | `/overview` | Bot 状态、今日 Token、活跃群数、最近工具调用 |
+| Token 用量 | `/tokens` | 每日趋势图、来源分布、费用估算 |
+| 对话浏览器 | `/conversations` | Admin 私聊 + 群聊历史分页浏览 |
+| 记忆管理 | `/memory` | 编辑 MEMORY.md（Admin + 各群）、语义搜索、索引状态 |
+| 人格管理 | `/personas` | 查看/创建/编辑/删除人格（通用 + 群私有） |
+| 提醒管理 | `/reminders` | 查看/取消提醒 |
+| 技能管理 | `/skills` | 查看/创建/编辑/删除技能 |
+| 配置编辑 | `/config` | 编辑 .env 和 Admin 上下文文件 |
+
+**认证配置（.env）：**
+```env
+DASHBOARD_USER=admin
+DASHBOARD_PASSWORD_HASH=       # bcrypt 哈希，留空则默认密码 admin
+DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
+```
+
+**前端项目位置**：`web/`（Vue 3 + Vite + Element Plus + ECharts），构建产物 `web/dist/`。
+
 ### Agentic Loop（工具调用）
 群聊和 Admin 私聊都有完整 Agentic Loop：
 1. 发 LLM 请求（带 tools）
@@ -130,6 +162,21 @@ plugins/
     └── manager.py      #   MCP 服务器连接 + 工具调用
 ├── memory/             # 记忆向量索引
 │   └── indexer.py      #   Embedding + BM25 混合搜索 + MMR + 时间衰减
+├── dashboard/          # Web Dashboard
+│   ├── __init__.py     #   NoneBot 启动钩子，挂载 FastAPI 子应用
+│   ├── app.py          #   FastAPI 实例 + CORS + Rate Limiting
+│   ├── auth.py         #   JWT 认证（PyJWT + bcrypt）
+│   ├── config.py       #   Dashboard 配置
+│   └── routes/         #   API 路由模块
+│       ├── auth.py     #     登录/刷新
+│       ├── overview.py #     总览聚合
+│       ├── tokens.py   #     Token 用量统计
+│       ├── conversations.py  # 对话历史
+│       ├── memory.py   #     记忆管理
+│       ├── personas.py #     人格 CRUD
+│       ├── reminders.py #    提醒管理
+│       ├── skills.py   #     技能管理
+│       └── config_routes.py  # 配置编辑
 ```
 
 ## 测试约定

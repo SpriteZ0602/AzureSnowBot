@@ -1,6 +1,6 @@
 # AzureSnowBot
 
-基于 NapCat + NoneBot2 的 QQ 智能 Agent Bot。支持多轮对话、人格切换、MCP 工具调用、渐进式披露 Skill 系统、本地工具注册、对话压缩、仿真人分条发送。
+基于 NapCat + NoneBot2 的 QQ 智能 Agent Bot。支持多轮对话、人格切换、MCP 工具调用、渐进式披露 Skill 系统、本地工具注册、对话压缩、仿真人分条发送、Web Dashboard 管理面板。
 
 ## 功能
 
@@ -176,10 +176,32 @@ data/skills/<skill-name>/
 
 内置技能：`web-search`、`translator`、`code-reviewer`、`moegirl-wiki`
 
+### Web Dashboard
+
+基于 FastAPI + Vue 3 的管理面板，挂载到 NoneBot2 的 ASGI server（共享进程，直接调用现有插件函数读数据）：
+
+| 页面 | 说明 |
+|------|------|
+| 总览 | Bot 运行状态、今日 Token、活跃群数、最近工具调用 |
+| Token 用量 | 每日趋势折线图、来源分布饼图、费用估算 |
+| 对话浏览器 | Admin 私聊 + 群聊历史分页浏览（气泡视图） |
+| 记忆管理 | 编辑 MEMORY.md（Admin + 各群）、语义搜索、索引状态 |
+| 人格管理 | 查看/创建/编辑/删除人格（通用 + 群私有） |
+| 提醒管理 | 查看/取消提醒 |
+| 技能管理 | 查看/创建/编辑/删除技能 |
+| 配置编辑 | 编辑 .env 和 Admin 上下文文件 |
+
+- **认证**：JWT (PyJWT + bcrypt)，支持公网访问
+- **开发模式**：`cd web && npm run dev` → `localhost:5173`，Vite 代理 API 到后端
+- **生产模式**：`cd web && npm run build` → `web/dist/`，访问 `http://host:8082/dashboard/`
+- **默认登录**：用户名 `admin`，密码 `admin`（可通过 `.env` 配置 bcrypt 哈希）
+
 ## 技术栈
 
 - **NapCat** — 基于 NTQQ 的无头 Bot 框架，提供 OneBot 11 协议支持
 - **NoneBot2** — Python 异步 Bot 框架，负责消息处理与插件管理
+- **FastAPI** — Web Dashboard 后端 API，挂载到 NoneBot2 的 ASGI server
+- **Vue 3 + Vite + Element Plus** — Web Dashboard 前端 SPA
 - **LLM 多服务商支持** — Gemini / OpenAI / Qwen 三选一，通过 `.env` 一键切换
 - **MCP SDK** — Model Context Protocol 客户端，连接外部工具服务器
 
@@ -224,6 +246,12 @@ AzureSnowBot/
 │       └── manager.py             #     MCP 服务器连接 + 工具调用
 │   └── memory/                    #   记忆向量索引
 │       └── indexer.py             #     Embedding + BM25 混合搜索 + MMR + 时间衰减
+│   └── dashboard/                 #   Web Dashboard
+│       ├── __init__.py            #     NoneBot 启动钩子，挂载 FastAPI 子应用
+│       ├── app.py                 #     FastAPI 实例 + CORS + Rate Limiting
+│       ├── auth.py                #     JWT 认证（PyJWT + bcrypt）
+│       ├── config.py              #     Dashboard 配置
+│       └── routes/                #     API 路由模块（10 个端点组）
 ├── data/
 │   ├── mcp_servers.json           # MCP 服务器配置
 │   ├── skills/                    # Skill 技能目录（共享）
@@ -256,6 +284,10 @@ AzureSnowBot/
 │           ├── <persona>.jsonl    #   对话历史（按人格隔离）
 │           ├── _chatlog.jsonl     #   全量群聊记录
 │           └── personas/          #   群私有人格
+├── web/                           # Web Dashboard 前端
+│   ├── package.json               #   Vue 3 + Vite + Element Plus + ECharts
+│   ├── vite.config.ts             #   Vite 配置（开发代理 + 生产构建）
+│   └── src/                       #   Vue 源码（8 个页面组件）
 ├── tests/                         # 单元测试
 │   ├── test_calculate.py
 │   ├── test_chatlog.py
@@ -285,7 +317,13 @@ AzureSnowBot/
 ### 安装依赖
 
 ```bash
-pip install "nonebot2[fastapi]" nonebot-adapter-onebot httpx mcp
+pip install "nonebot2[fastapi]" nonebot-adapter-onebot httpx mcp PyJWT bcrypt
+```
+
+Web Dashboard 前端（可选，需要 Node.js）：
+
+```bash
+cd web && npm install && npm run build
 ```
 
 ### 配置
@@ -330,6 +368,9 @@ ADMIN_NUMBER=你的QQ号
 | `GROUP_WHITELIST` | 允许使用的群号列表（JSON 数组） | `[]`（空 = 不响应任何群） |
 | `ADMIN_NUMBER` | 管理员 QQ 号，仅该用户可以私聊 Bot | 空 |
 | `PROACTIVE_IDLE_SECONDS` | Admin 私聊主动发言空闲等待秒数 | `3600`（1 小时） |
+| `DASHBOARD_USER` | Dashboard 登录用户名 | `admin` |
+| `DASHBOARD_PASSWORD_HASH` | Dashboard 密码 bcrypt 哈希（留空则默认密码 admin） | 空 |
+| `DASHBOARD_SECRET_KEY` | JWT 签名密钥（留空则每次重启随机生成） | 空 |
 
 2. 配置 Admin 上下文文件（可选，按需编辑）：
 
@@ -464,5 +505,6 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] 群聊自动 Compaction
 - [x] 网页搜索与读取工具（web_search + web_read，无需 API key）
 - [x] 群聊引用消息图片识别（多模态）
+- [x] Web Dashboard 管理面板（Vue 3 + FastAPI，JWT 认证）
 - [ ] 图片理解 / 多模态（直接发送图片，私聊 + 群聊）
 - [ ] 各类 Skill 扩展
