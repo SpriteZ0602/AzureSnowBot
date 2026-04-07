@@ -3,6 +3,7 @@ __pycache__/
 .env
 vendor/
 reference/
+good_persona/
 data/sessions
 data/admin/config.json
 data/admin/history.jsonl
