@@ -17,6 +17,7 @@ from ..runtime_context import build_runtime_context
 from ..persona.manager import (
     get_active_persona, load_persona_prompt,
     load_history, append_message, get_group_config,
+    _session_path as persona_session_path,
 )
 from ..mcp.manager import get_openai_tools, call_tool, MAX_TOOL_ROUNDS
 from ..skill.manager import (
@@ -49,14 +50,6 @@ async def handle_group_chat(event: GroupMessageEvent):
     user_input = extract_text(event)
     if not user_input:
         return
-
-    # 检查 /withoutChunking 标记
-    no_chunk = False
-    if user_input.startswith("/withoutChunking"):
-        no_chunk = True
-        user_input = user_input[len("/withoutChunking"):].strip()
-        if not user_input:
-            return
 
     if not OPENAI_API_KEY:
         await group_chat.finish("未配置 OpenAI API Key，请联系管理员。")
@@ -120,8 +113,19 @@ async def handle_group_chat(event: GroupMessageEvent):
     else:
         llm_user_msg = user_msg
 
-    # 加载历史并截断
+    # 加载历史 → 压缩（如需要） → 截断
     history = load_history(group_id, active_persona)
+
+    # Compaction: 如果历史 token 过多，压缩旧消息为摘要 + 提取记忆
+    from ..chat.compaction import compact_history, should_compact
+    if should_compact(history):
+        from pathlib import Path
+        session_path = persona_session_path(group_id, active_persona)
+        memory_path = Path(f"data/sessions/groups/{group_id}/MEMORY.md")
+        compacted = await compact_history(group_id, session_path, memory_path)
+        if compacted:
+            history = load_history(group_id, active_persona)
+
     trimmed = trim_history(history, system_prompt)
 
     # 组装 messages：最后一条用 LLM 版本（可能含图片），其余用纯文本
@@ -161,14 +165,8 @@ async def handle_group_chat(event: GroupMessageEvent):
                 if reply:
                     append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
                     bot = get_bot()
-                    if no_chunk:
-                        await bot.send_group_msg(
-                            group_id=event.group_id,
-                            message=MessageSegment.reply(event.message_id) + reply,
-                        )
-                    else:
-                        chunks = chunk_text(reply)
-                        await send_chunked(bot, event, chunks)
+                    chunks = chunk_text(reply)
+                    await send_chunked(bot, event, chunks)
                 return
 
             messages.append(assistant_msg)

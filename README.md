@@ -9,7 +9,6 @@
 | 指令 | 说明 |
 |------|------|
 | @Bot `任意消息` | 调用 LLM 进行多轮对话（支持引用消息） |
-| @Bot `/withoutChunking 消息` | 不分条发送，整条回复 |
 | @Bot `/persona` | 列出所有可用人格 |
 | @Bot `/persona <名称>` | 切换到指定人格 |
 | @Bot `/persona info` | 查看当前人格的 prompt 摘要 |
@@ -71,7 +70,6 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 - 每条间随机延迟 3-5 秒，模拟打字节奏
 - 第一条消息引用原消息，后续直接发送
 - 同一会话加锁，防止并发请求交错混乱
-- 发送 `/withoutChunking` 前缀可跳过分条，整条返回
 
 ### MCP 工具调用
 
@@ -155,6 +153,7 @@ Admin 私聊对话历史超过 token 阈值时自动压缩：
 - 压缩时自动提取重要信息写入 `MEMORY.md`（用户偏好、决定、承诺等）
 - 压缩后 `history.jsonl` 被重写为 `[摘要消息] + [保留消息]`
 - 压缩完成后自动刷新记忆向量索引，确保 `memory_search` 可检索最新内容
+- 私聊和群聊均支持自动压缩（群聊按人格隔离压缩）
 
 ### Skill 技能系统（渐进式披露）
 
@@ -241,6 +240,7 @@ AzureSnowBot/
 │   │   ├── philosopher.txt        #   哲学家
 │   │   └── roaster.txt            #   毒舌
 │   ├── reminders.json             # 定时提醒持久化数据
+│   ├── tool_calls.jsonl           # 工具调用日志（全局）
 │   ├── admin/                     # 管理员私聊
 │   │   ├── SOUL.md                #   人格灵魂（角色设定）
 │   │   ├── AGENTS.md              #   操作手册
@@ -248,7 +248,6 @@ AzureSnowBot/
 │   │   ├── MEMORY.md              #   长期记忆
 │   │   ├── HEARTBEAT.md           #   心跳任务清单
 │   │   ├── token_stats.json       #   Token 用量统计数据
-│   │   ├── tool_calls.jsonl       #   工具调用日志
 │   │   ├── config.json            #   {"last_message_at": "..."}
 │   │   └── history.jsonl          #   对话历史
 │   ├── sessions/groups/           # 群聊会话
@@ -265,6 +264,7 @@ AzureSnowBot/
 │   ├── test_compaction.py
 │   ├── test_file_tools.py
 │   ├── test_local_tools_manager.py
+│   ├── test_llm_fallback.py
 │   ├── test_memory_indexer.py
 │   ├── test_runtime_context.py
 │   ├── test_proactive.py
@@ -280,19 +280,12 @@ AzureSnowBot/
 
 - Python >= 3.10
 - NapCat Shell 已安装并登录 QQ
-- Node.js（如需 MCP 工具，如 Playwright）
+- Node.js（如需 MCP 工具）
 
 ### 安装依赖
 
 ```bash
 pip install "nonebot2[fastapi]" nonebot-adapter-onebot httpx mcp
-```
-
-如需 Playwright MCP 服务器：
-
-```bash
-npm install -g @playwright/mcp playwright
-npx playwright install chromium
 ```
 
 ### 配置
@@ -448,8 +441,7 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] 群聊白名单
 - [x] 人格系统（通用 + 群私有，双层体系）
 - [x] MCP 工具调用（Agentic Loop）
-- [x] Playwright 浏览器工具（无头模式）
-- [x] Skill 技能系统（渐进式披露）
+- [x] MCP 工具调用（Agentic Loop）
 - [x] 本地自定义工具注册
 - [x] 消息分条发送 + 仿真人节奏
 - [x] 定时提醒（参考 OpenClaw cron 调度器）
@@ -468,6 +460,9 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - [x] 工具调用日志持久化
 - [x] Admin 专用 Skill 目录（admin_skills/）
 - [x] 电脑操控工具（run_command，仅 Admin 私聊）
+- [x] LLM 多模型自动 Fallback（429/500/超时自动降级）
+- [x] 群聊自动 Compaction
+- [x] 网页搜索与读取工具（web_search + web_read，无需 API key）
 - [x] 群聊引用消息图片识别（多模态）
 - [ ] 图片理解 / 多模态（直接发送图片，私聊 + 群聊）
 - [ ] 各类 Skill 扩展
