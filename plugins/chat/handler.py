@@ -313,8 +313,6 @@ async def handle_chat(event: PrivateMessageEvent):
 
     # 工具注入（完整工具链：Skill + 本地 + MCP）
     openai_tools = skill_openai_tools() + local_openai_tools() + mcp_openai_tools()
-    if openai_tools:
-        payload["tools"] = openai_tools
 
     # 工具调用上下文
     sender_name = getattr(event, "sender", None)
@@ -327,69 +325,61 @@ async def handle_chat(event: PrivateMessageEvent):
     }
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            for round_idx in range(MAX_TOOL_ROUNDS):
-                resp = await client.post(
-                    f"{OPENAI_BASE_URL}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                from ..token_stats import record_usage
-                record_usage("chat", data.get("usage"))
-                choice = data["choices"][0]
-                assistant_msg = choice["message"]
+        from ..llm import call_llm
+        for round_idx in range(MAX_TOOL_ROUNDS):
+            data = await call_llm(messages, tools=openai_tools or None, source="chat")
+            choice = data["choices"][0]
+            assistant_msg = choice["message"]
 
-                tool_calls = assistant_msg.get("tool_calls")
-                if not tool_calls:
-                    reply = (assistant_msg.get("content") or "").strip()
-                    if reply:
-                        append_message(user_id, {"role": "assistant", "content": reply})
-                        bot = get_bot()
-                        chunks = chunk_text(reply)
-                        await send_chunked(bot, event, chunks, reply_first=False)
-                        reset_idle_timer()
-                    return
+            tool_calls = assistant_msg.get("tool_calls")
+            if not tool_calls:
+                reply = (assistant_msg.get("content") or "").strip()
+                if reply:
+                    append_message(user_id, {"role": "assistant", "content": reply})
+                    bot = get_bot()
+                    chunks = chunk_text(reply)
+                    await send_chunked(bot, event, chunks, reply_first=False)
+                    reset_idle_timer()
+                return
 
-                # 处理工具调用
-                messages.append(assistant_msg)
-                logger.info(f"私聊 LLM 请求工具调用 (round {round_idx + 1}): "
-                            f"{[tc['function']['name'] for tc in tool_calls]}")
+            # 处理工具调用
+            messages.append(assistant_msg)
+            logger.info(f"私聊 LLM 请求工具调用 (round {round_idx + 1}): "
+                        f"{[tc['function']['name'] for tc in tool_calls]}")
 
-                for tc in tool_calls:
-                    fn_name = tc["function"]["name"]
-                    try:
-                        fn_args = json.loads(tc["function"]["arguments"])
-                    except json.JSONDecodeError:
-                        fn_args = {}
+            for tc in tool_calls:
+                fn_name = tc["function"]["name"]
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    fn_args = {}
 
-                    # 分发链路：Skill → 本地工具 → MCP
-                    skill_result = skill_handle_tool_call(fn_name, fn_args)
-                    if skill_result is not None:
-                        tool_result = skill_result
+                # 分发链路：Skill → 本地工具 → MCP
+                skill_result = skill_handle_tool_call(fn_name, fn_args)
+                if skill_result is not None:
+                    tool_result = skill_result
+                else:
+                    local_result = await local_handle_tool_call(fn_name, fn_args, context=_tool_context)
+                    if local_result is not None:
+                        tool_result = local_result
                     else:
-                        local_result = await local_handle_tool_call(fn_name, fn_args, context=_tool_context)
-                        if local_result is not None:
-                            tool_result = local_result
-                        else:
-                            tool_result = await mcp_call_tool(fn_name, fn_args)
+                        tool_result = await mcp_call_tool(fn_name, fn_args)
 
-                    from ..tool_log import log_tool_call
-                    log_tool_call("chat", fn_name, fn_args, tool_result, user_id=user_id)
+                from ..tool_log import log_tool_call
+                log_tool_call("chat", fn_name, fn_args, tool_result, user_id=user_id)
 
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": tool_result,
-                    })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": tool_result,
+                })
 
-            # 超过最大轮次
-            reply = "（工具调用轮次已达上限，请重新提问）"
-            append_message(user_id, {"role": "assistant", "content": reply})
-            bot = get_bot()
-            await send_chunked(bot, event, [reply], reply_first=False)
-            reset_idle_timer()
+        # 超过最大轮次
+        reply = "（工具调用轮次已达上限，请重新提问）"
+        append_message(user_id, {"role": "assistant", "content": reply})
+        bot = get_bot()
+        await send_chunked(bot, event, [reply], reply_first=False)
+        reset_idle_timer()
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await chat.finish(f"API 请求失败 ({e.response.status_code})")

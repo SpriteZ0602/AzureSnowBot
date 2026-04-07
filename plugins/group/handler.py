@@ -146,78 +146,68 @@ async def handle_group_chat(event: GroupMessageEvent):
 
     # 合并 MCP 工具 + Skill 工具 + 本地工具（群聊过滤 admin_only 工具）
     openai_tools = get_openai_tools() + skill_openai_tools() + local_openai_tools(chat_type="group")
-    if openai_tools:
-        payload["tools"] = openai_tools
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            # ── Agentic Loop ──
-            for round_idx in range(MAX_TOOL_ROUNDS):
-                resp = await client.post(
-                    f"{OPENAI_BASE_URL}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                from ..token_stats import record_usage
-                record_usage("group", data.get("usage"))
-                choice = data["choices"][0]
-                assistant_msg = choice["message"]
+        from ..llm import call_llm
+        # ── Agentic Loop ──
+        for round_idx in range(MAX_TOOL_ROUNDS):
+            data = await call_llm(messages, tools=openai_tools or None, source="group")
+            choice = data["choices"][0]
+            assistant_msg = choice["message"]
 
-                tool_calls = assistant_msg.get("tool_calls")
-                if not tool_calls:
-                    reply = (assistant_msg.get("content") or "").strip()
-                    if reply:
-                        append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
-                        bot = get_bot()
-                        if no_chunk:
-                            await bot.send_group_msg(
-                                group_id=event.group_id,
-                                message=MessageSegment.reply(event.message_id) + reply,
-                            )
-                        else:
-                            chunks = chunk_text(reply)
-                            await send_chunked(bot, event, chunks)
-                    return
-
-                messages.append(assistant_msg)
-                logger.info(f"LLM 请求工具调用 (round {round_idx + 1}): "
-                            f"{[tc['function']['name'] for tc in tool_calls]}")
-
-                for tc in tool_calls:
-                    fn_name = tc["function"]["name"]
-                    try:
-                        fn_args = json.loads(tc["function"]["arguments"])
-                    except json.JSONDecodeError:
-                        fn_args = {}
-
-                    # 分发链路：Skill → 本地工具 → MCP
-                    skill_result = skill_handle_tool_call(fn_name, fn_args)
-                    if skill_result is not None:
-                        tool_result = skill_result
+            tool_calls = assistant_msg.get("tool_calls")
+            if not tool_calls:
+                reply = (assistant_msg.get("content") or "").strip()
+                if reply:
+                    append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
+                    bot = get_bot()
+                    if no_chunk:
+                        await bot.send_group_msg(
+                            group_id=event.group_id,
+                            message=MessageSegment.reply(event.message_id) + reply,
+                        )
                     else:
-                        local_result = await local_handle_tool_call(fn_name, fn_args, context=_tool_context)
-                        if local_result is not None:
-                            tool_result = local_result
-                        else:
-                            tool_result = await call_tool(fn_name, fn_args)
+                        chunks = chunk_text(reply)
+                        await send_chunked(bot, event, chunks)
+                return
 
-                    from ..tool_log import log_tool_call
-                    log_tool_call("group", fn_name, fn_args, tool_result,
-                                  user_id=str(event.user_id), group_id=group_id)
+            messages.append(assistant_msg)
+            logger.info(f"LLM 请求工具调用 (round {round_idx + 1}): "
+                        f"{[tc['function']['name'] for tc in tool_calls]}")
 
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": tool_result,
-                    })
+            for tc in tool_calls:
+                fn_name = tc["function"]["name"]
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    fn_args = {}
 
-            # 超过最大轮次
-            reply = "（工具调用轮次已达上限，请重新提问）"
-            append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
-            bot = get_bot()
-            await send_chunked(bot, event, [reply])
+                # 分发链路：Skill → 本地工具 → MCP
+                skill_result = skill_handle_tool_call(fn_name, fn_args)
+                if skill_result is not None:
+                    tool_result = skill_result
+                else:
+                    local_result = await local_handle_tool_call(fn_name, fn_args, context=_tool_context)
+                    if local_result is not None:
+                        tool_result = local_result
+                    else:
+                        tool_result = await call_tool(fn_name, fn_args)
+
+                from ..tool_log import log_tool_call
+                log_tool_call("group", fn_name, fn_args, tool_result,
+                              user_id=str(event.user_id), group_id=group_id)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": tool_result,
+                })
+
+        # 超过最大轮次
+        reply = "（工具调用轮次已达上限，请重新提问）"
+        append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
+        bot = get_bot()
+        await send_chunked(bot, event, [reply])
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await group_chat.finish(f"API 请求失败 ({e.response.status_code})")

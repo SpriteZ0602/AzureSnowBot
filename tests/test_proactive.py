@@ -58,6 +58,8 @@ _mock_llm = types.ModuleType("plugins.llm")
 _mock_llm.API_KEY = "test-key"
 _mock_llm.BASE_URL = "https://test.example.com"
 _mock_llm.MODEL = "test-model"
+_mock_llm.LLM_PROVIDER = "gemini"
+_mock_llm.call_llm = AsyncMock(return_value={"choices": [{"message": {"content": ""}}], "usage": {}})
 sys.modules["plugins.llm"] = _mock_llm
 
 # mock plugins.local_tools.manager
@@ -169,6 +171,15 @@ def _setup_handler_mock(tmp_dir: Path, messages: list[dict],
     return mock_handler
 
 
+# ── helper: 构造 call_llm mock ──
+
+def _mock_call_llm(reply_content: str):
+    """返回一个 AsyncMock，模拟 call_llm 返回指定回复"""
+    async def _fake_call_llm(messages, *, tools=None, source="unknown", timeout=120):
+        return {"choices": [{"message": {"content": reply_content}}], "usage": {}}
+    return _fake_call_llm
+
+
 # ══════════════════════════════════════════════════════
 # 测试
 # ══════════════════════════════════════════════════════
@@ -210,19 +221,9 @@ class TestHeartbeatDecision:
 
     @pytest.mark.asyncio
     async def test_no_history_does_not_crash(self, tmp_session_dir):
-        """对话历史为空时，心跳仍可正常运行（不跳过，因为心跳不要求有历史）。"""
+        """对话历史为空时，心跳仍可正常运行。"""
         _setup_handler_mock(tmp_session_dir, [])
-        # 心跳允许空历史运行，需要 mock LLM
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "HEARTBEAT_OK"}}]
-        }
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch("plugins.llm.call_llm", new=_mock_call_llm("HEARTBEAT_OK")):
             await proactive._try_heartbeat()
         _mock_chunker.send_chunked_raw.assert_not_awaited()
 
@@ -241,17 +242,7 @@ class TestHeartbeatDecision:
             {"role": "assistant", "content": "是啊，阳光明媚"},
         ], admin_prompt="你是绘名")
 
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "HEARTBEAT_OK"}}]
-        }
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(return_value=mock_response)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch("plugins.llm.call_llm", new=_mock_call_llm("HEARTBEAT_OK")):
             await proactive._try_heartbeat()
 
         _mock_chunker.send_chunked_raw.assert_not_awaited()
@@ -265,19 +256,9 @@ class TestHeartbeatDecision:
         ], admin_prompt="你是绘名")
 
         proactive_reply = "话说你昨天画的那幅画完成了吗？"
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": proactive_reply}}]
-        }
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(return_value=mock_response)
-
         mock_bot = AsyncMock()
 
-        with patch("httpx.AsyncClient", return_value=mock_client), \
+        with patch("plugins.llm.call_llm", new=_mock_call_llm(proactive_reply)), \
              patch("plugins.chat.proactive.get_bot", return_value=mock_bot):
             await proactive._try_heartbeat()
 
@@ -296,17 +277,7 @@ class TestHeartbeatDecision:
             {"role": "assistant", "content": "嗯嗯"},
         ])
 
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": ""}}]
-        }
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(return_value=mock_response)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch("plugins.llm.call_llm", new=_mock_call_llm("")):
             await proactive._try_heartbeat()
 
         _mock_chunker.send_chunked_raw.assert_not_awaited()
@@ -319,49 +290,35 @@ class TestHeartbeatDecision:
             {"role": "assistant", "content": "你好呀"},
         ], admin_prompt="你是東雲絵名")
 
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "NO"}}]
-        }
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(return_value=mock_response)
+        captured_messages = []
+        async def _capture_call_llm(messages, *, tools=None, source="unknown", timeout=120):
+            captured_messages.extend(messages)
+            return {"choices": [{"message": {"content": "NO"}}], "usage": {}}
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch("plugins.llm.call_llm", new=_capture_call_llm):
             await proactive._try_heartbeat()
 
-        call_args = mock_client.post.call_args
-        payload = call_args.kwargs.get("json") or call_args[1].get("json")
-        system_msg = payload["messages"][0]
+        system_msg = captured_messages[0]
         assert system_msg["role"] == "system"
         assert system_msg["content"].startswith("你是東雲絵名")
 
     @pytest.mark.asyncio
     async def test_heartbeat_instruction_appended(self, tmp_session_dir):
-        """心跳指令应作为最后一条 user 消息追加（确保 LLM 优先遵循）。"""
+        """心跳指令应追加到消息末尾。"""
         _setup_handler_mock(tmp_session_dir, [
             {"role": "user", "content": "你好"},
             {"role": "assistant", "content": "你好呀"},
         ], admin_prompt="你是绘名")
 
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "NO"}}]
-        }
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(return_value=mock_response)
+        captured_messages = []
+        async def _capture_call_llm(messages, *, tools=None, source="unknown", timeout=120):
+            captured_messages.extend(messages)
+            return {"choices": [{"message": {"content": "NO"}}], "usage": {}}
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch("plugins.llm.call_llm", new=_capture_call_llm):
             await proactive._try_heartbeat()
 
-        call_args = mock_client.post.call_args
-        payload = call_args.kwargs.get("json") or call_args[1].get("json")
-        last_msg = payload["messages"][-1]
+        last_msg = captured_messages[-1]
         assert last_msg["role"] == "user"
         assert "心跳" in last_msg["content"] or "HEARTBEAT" in last_msg["content"]
 

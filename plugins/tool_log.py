@@ -13,7 +13,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-LOG_FILE = Path("data/admin/tool_calls.jsonl")
+LOG_FILE = Path("data/tool_calls.jsonl")
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 

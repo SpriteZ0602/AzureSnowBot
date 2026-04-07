@@ -770,6 +770,108 @@ async def get_group_chat_log(
 
 
 # ──────────────────────────────────────────────────────
+# 网络搜索与网页读取工具
+# ──────────────────────────────────────────────────────
+
+@register_tool(
+    name="web_read",
+    description=(
+        "读取指定网页的内容，返回可读的纯文本。"
+        "用途：查看某个链接的内容、阅读文章、获取网页信息。"
+        "使用 Jina Reader API 提取正文，无需浏览器。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "要读取的网页 URL，例如: https://example.com/article",
+            },
+        },
+        "required": ["url"],
+    },
+)
+async def web_read_tool(url: str = "", **kwargs) -> str:
+    import httpx as _httpx
+
+    if not url:
+        return "[错误] 请提供 URL"
+
+    try:
+        async with _httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://r.jina.ai/{url}",
+                headers={"Accept": "text/plain"},
+            )
+            resp.raise_for_status()
+            text = resp.text.strip()
+            if not text:
+                return f"[错误] 页面内容为空: {url}"
+            # 截断过长内容
+            if len(text) > 6000:
+                text = text[:6000] + f"\n...(内容被截断，共 {len(text)} 字符)"
+            return text
+    except Exception as e:
+        return f"[错误] 读取网页失败: {e}"
+
+
+@register_tool(
+    name="web_search",
+    description=(
+        "搜索互联网获取实时信息。"
+        "当用户询问最新新闻、实时数据、或你不确定的事实时使用。"
+        "返回搜索结果的标题、URL 和摘要。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "搜索关键词，例如: 今天天气、最新新闻、Python 3.14 新特性",
+            },
+            "num_results": {
+                "type": "integer",
+                "description": "返回结果数量，默认 5，最多 10",
+            },
+        },
+        "required": ["query"],
+    },
+)
+async def web_search_tool(query: str = "", num_results: int = 5, **kwargs) -> str:
+    import httpx as _httpx
+
+    if not query:
+        return "[错误] 请提供搜索关键词"
+
+    num_results = max(1, min(10, num_results))
+
+    # 使用 Jina Search API
+    try:
+        async with _httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://s.jina.ai/{query}",
+                headers={"Accept": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            results = data.get("data", [])[:num_results]
+            if not results:
+                return f"未找到与「{query}」相关的搜索结果"
+
+            lines: list[str] = []
+            for i, item in enumerate(results, 1):
+                title = item.get("title", "无标题")
+                url = item.get("url", "")
+                desc = item.get("description", item.get("content", ""))[:200]
+                lines.append(f"{i}. {title}\n   {url}\n   {desc}")
+
+            return f"搜索结果（{query}，{len(results)} 条）:\n\n" + "\n\n".join(lines)
+    except Exception as e:
+        return f"[错误] 搜索失败: {e}"
+
+
+# ──────────────────────────────────────────────────────
 # 记忆语义搜索工具（仅 Admin 私聊）
 # ──────────────────────────────────────────────────────
 

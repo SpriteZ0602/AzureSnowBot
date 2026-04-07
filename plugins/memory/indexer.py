@@ -27,7 +27,7 @@ from ..llm import API_KEY, BASE_URL, LLM_PROVIDER
 # ──────────────────── Embedding 模型配置 ────────────────────
 
 _EMBEDDING_MODELS: dict[str, str] = {
-    "gemini": "text-embedding-004",
+    "gemini": "gemini-embedding-001",
     "openai": "text-embedding-3-small",
     "qwen": "text-embedding-v3",
 }
@@ -175,18 +175,8 @@ def get_all_chunks(sources: list[Path] | None = None) -> list[dict]:
 
 # ──────────────────── Embedding API ────────────────────
 
-async def embed_texts(texts: list[str]) -> list[list[float]]:
-    """调用 Embedding API 获取向量"""
-    if not texts:
-        return []
-    if not API_KEY:
-        raise RuntimeError("未配置 API Key，无法调用 Embedding API")
-
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
-
+async def _embed_openai(texts: list[str], headers: dict) -> list[list[float]]:
+    """OpenAI / Qwen 兼容的 Embedding API"""
     all_vectors: list[list[float]] = []
     for i in range(0, len(texts), BATCH_SIZE):
         batch = texts[i:i + BATCH_SIZE]
@@ -205,8 +195,50 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
                 [round(v, 6) for v in d["embedding"]]
                 for d in sorted_data
             )
-
     return all_vectors
+
+
+async def _embed_gemini(texts: list[str]) -> list[list[float]]:
+    """Gemini 原生 Embedding API（不走 OpenAI 兼容端点）"""
+    GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
+    all_vectors: list[list[float]] = []
+    for i in range(0, len(texts), BATCH_SIZE):
+        batch = texts[i:i + BATCH_SIZE]
+        requests_body = [
+            {"model": f"models/{EMBEDDING_MODEL}", "content": {"parts": [{"text": t}]}}
+            for t in batch
+        ]
+        async with httpx.AsyncClient(timeout=EMBEDDING_TIMEOUT) as client:
+            resp = await client.post(
+                f"{GEMINI_BASE}/models/{EMBEDDING_MODEL}:batchEmbedContents",
+                params={"key": API_KEY},
+                headers={"Content-Type": "application/json"},
+                json={"requests": requests_body},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            for emb in data.get("embeddings", []):
+                all_vectors.append(
+                    [round(v, 6) for v in emb.get("values", [])]
+                )
+    return all_vectors
+
+
+async def embed_texts(texts: list[str]) -> list[list[float]]:
+    """调用 Embedding API 获取向量（自动适配 Gemini / OpenAI / Qwen）"""
+    if not texts:
+        return []
+    if not API_KEY:
+        raise RuntimeError("未配置 API Key，无法调用 Embedding API")
+
+    if LLM_PROVIDER == "gemini":
+        return await _embed_gemini(texts)
+
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+    }
+    return await _embed_openai(texts, headers)
 
 
 # ──────────────────── 余弦相似度 ────────────────────

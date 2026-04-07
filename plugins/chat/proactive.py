@@ -235,8 +235,6 @@ async def _try_heartbeat() -> None:
 
     # 注入完整工具链（Skill + 本地 + MCP）
     openai_tools = skill_openai_tools() + local_openai_tools() + mcp_openai_tools()
-    if openai_tools:
-        payload["tools"] = openai_tools
 
     # 工具调用上下文
     _tool_context = {
@@ -247,71 +245,63 @@ async def _try_heartbeat() -> None:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            for round_idx in range(MAX_TOOL_ROUNDS):
-                resp = await client.post(
-                    f"{BASE_URL}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                from ..token_stats import record_usage
-                record_usage("heartbeat", data.get("usage"))
-                choice = data["choices"][0]
-                assistant_msg = choice["message"]
+        from ..llm import call_llm
+        for round_idx in range(MAX_TOOL_ROUNDS):
+            data = await call_llm(messages, tools=openai_tools or None, source="heartbeat")
+            choice = data["choices"][0]
+            assistant_msg = choice["message"]
 
-                tool_calls = assistant_msg.get("tool_calls")
-                if not tool_calls:
-                    # 最终回复
-                    reply = (assistant_msg.get("content") or "").strip()
+            tool_calls = assistant_msg.get("tool_calls")
+            if not tool_calls:
+                # 最终回复
+                reply = (assistant_msg.get("content") or "").strip()
 
-                    if _is_heartbeat_ok(reply):
-                        logger.debug("心跳: LLM 回复 HEARTBEAT_OK，静默")
-                        return
-
-                    # LLM 有话要发给用户
-                    append_message(ADMIN_NUMBER, {"role": "assistant", "content": reply})
-                    bot = get_bot()
-                    await send_chunked_raw(bot, "private", int(ADMIN_NUMBER), reply)
-                    logger.info(f"心跳: 已发送主动消息 ({len(reply)} 字)")
+                if _is_heartbeat_ok(reply):
+                    logger.debug("心跳: LLM 回复 HEARTBEAT_OK，静默")
                     return
 
-                # 处理工具调用（LLM 在心跳中可以读写记忆等）
-                messages.append(assistant_msg)
-                logger.info(
-                    f"心跳 LLM 工具调用 (round {round_idx + 1}): "
-                    f"{[tc['function']['name'] for tc in tool_calls]}"
-                )
+                # LLM 有话要发给用户
+                append_message(ADMIN_NUMBER, {"role": "assistant", "content": reply})
+                bot = get_bot()
+                await send_chunked_raw(bot, "private", int(ADMIN_NUMBER), reply)
+                logger.info(f"心跳: 已发送主动消息 ({len(reply)} 字)")
+                return
 
-                for tc in tool_calls:
-                    fn_name = tc["function"]["name"]
-                    try:
-                        fn_args = json.loads(tc["function"]["arguments"])
-                    except json.JSONDecodeError:
-                        fn_args = {}
+            # 处理工具调用（LLM 在心跳中可以读写记忆等）
+            messages.append(assistant_msg)
+            logger.info(
+                f"心跳 LLM 工具调用 (round {round_idx + 1}): "
+                f"{[tc['function']['name'] for tc in tool_calls]}"
+            )
 
-                    # 分发链路：Skill → 本地工具 → MCP
-                    skill_result = skill_handle_tool_call(fn_name, fn_args)
-                    if skill_result is not None:
-                        tool_result = skill_result
+            for tc in tool_calls:
+                fn_name = tc["function"]["name"]
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    fn_args = {}
+
+                # 分发链路：Skill → 本地工具 → MCP
+                skill_result = skill_handle_tool_call(fn_name, fn_args)
+                if skill_result is not None:
+                    tool_result = skill_result
+                else:
+                    local_result = await local_handle_tool_call(
+                        fn_name, fn_args, context=_tool_context
+                    )
+                    if local_result is not None:
+                        tool_result = local_result
                     else:
-                        local_result = await local_handle_tool_call(
-                            fn_name, fn_args, context=_tool_context
-                        )
-                        if local_result is not None:
-                            tool_result = local_result
-                        else:
-                            tool_result = await mcp_call_tool(fn_name, fn_args)
+                        tool_result = await mcp_call_tool(fn_name, fn_args)
 
-                    from ..tool_log import log_tool_call
-                    log_tool_call("heartbeat", fn_name, fn_args, tool_result)
+                from ..tool_log import log_tool_call
+                log_tool_call("heartbeat", fn_name, fn_args, tool_result)
 
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": tool_result,
-                    })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": tool_result,
+                })
 
         # 超过最大工具轮次
         logger.warning("心跳: 工具调用轮次达上限")
