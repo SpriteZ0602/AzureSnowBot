@@ -42,7 +42,8 @@ def log_tool_call(
         "source": source,
         "tool": tool_name,
         "args": arguments,
-        "result": result[:500] if result else "",
+        "result_len": len(result) if result else 0,
+        "ok": not result.startswith("[错误]") if result else True,
         "user_id": user_id,
         "group_id": group_id,
     }
