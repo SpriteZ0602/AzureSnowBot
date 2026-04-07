@@ -256,6 +256,8 @@ async def _try_heartbeat() -> None:
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                from ..token_stats import record_usage
+                record_usage("heartbeat", data.get("usage"))
                 choice = data["choices"][0]
                 assistant_msg = choice["message"]
 

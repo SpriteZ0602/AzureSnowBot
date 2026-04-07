@@ -198,6 +198,8 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
             )
             resp.raise_for_status()
             data = resp.json()
+            from ..token_stats import record_usage
+            record_usage("embedding", data.get("usage"))
             sorted_data = sorted(data["data"], key=lambda x: x["index"])
             all_vectors.extend(
                 [round(v, 6) for v in d["embedding"]]

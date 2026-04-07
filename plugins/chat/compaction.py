@@ -158,6 +158,8 @@ async def _call_llm(system_prompt: str, user_content: str) -> str | None:
             )
             resp.raise_for_status()
             data = resp.json()
+            from ..token_stats import record_usage
+            record_usage("compaction", data.get("usage"))
             return (data["choices"][0]["message"].get("content") or "").strip()
     except Exception as e:
         logger.error(f"Compaction LLM 调用失败: {e}")

@@ -160,6 +160,8 @@ async def handle_group_chat(event: GroupMessageEvent):
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                from ..token_stats import record_usage
+                record_usage("group", data.get("usage"))
                 choice = data["choices"][0]
                 assistant_msg = choice["message"]
 

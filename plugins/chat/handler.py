@@ -336,6 +336,8 @@ async def handle_chat(event: PrivateMessageEvent):
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                from ..token_stats import record_usage
+                record_usage("chat", data.get("usage"))
                 choice = data["choices"][0]
                 assistant_msg = choice["message"]
 

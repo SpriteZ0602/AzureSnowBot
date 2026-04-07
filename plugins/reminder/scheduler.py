@@ -145,6 +145,8 @@ async def _generate_reminder_message(job: ReminderJob) -> str:
             )
             resp.raise_for_status()
             data = resp.json()
+            from ..token_stats import record_usage
+            record_usage("reminder", data.get("usage"))
             reply = data["choices"][0]["message"]["content"].strip()
             if reply:
                 return reply

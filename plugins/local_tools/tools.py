@@ -377,6 +377,8 @@ async def run_sub_agent(
                 )
                 resp.raise_for_status()
                 result = resp.json()
+                from ..token_stats import record_usage
+                record_usage("sub_agent", result.get("usage"))
                 assistant_msg = result["choices"][0]["message"]
 
                 tool_calls = assistant_msg.get("tool_calls")
@@ -422,6 +424,16 @@ async def current_time(**kwargs) -> str:
     now = datetime.now()
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
     return f"{now.strftime('%Y-%m-%d %H:%M:%S')} {weekdays[now.weekday()]}"
+
+
+@register_tool(
+    name="get_token_stats",
+    description="查看今日 Token 使用量统计，包括各来源的消耗和预估费用。当用户问今天花了多少钱、用了多少 token 时使用。",
+    admin_only=True,
+)
+async def get_token_stats_tool(**kwargs) -> str:
+    from ..token_stats import get_stats_summary
+    return get_stats_summary()
 
 
 @register_tool(
