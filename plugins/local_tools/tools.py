@@ -404,6 +404,9 @@ async def run_sub_agent(
                     else:
                         tool_result = await mcp_call_tool(fn_name, fn_args)
 
+                    from ..tool_log import log_tool_call
+                    log_tool_call("sub_agent", fn_name, fn_args, tool_result)
+
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],

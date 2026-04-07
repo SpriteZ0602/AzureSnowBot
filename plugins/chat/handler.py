@@ -375,13 +375,14 @@ async def handle_chat(event: PrivateMessageEvent):
                         else:
                             tool_result = await mcp_call_tool(fn_name, fn_args)
 
+                    from ..tool_log import log_tool_call
+                    log_tool_call("chat", fn_name, fn_args, tool_result, user_id=user_id)
+
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
                         "content": tool_result,
                     })
-
-                payload["messages"] = messages
 
             # 超过最大轮次
             reply = "（工具调用轮次已达上限，请重新提问）"

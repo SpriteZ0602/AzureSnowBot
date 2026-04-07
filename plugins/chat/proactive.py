@@ -304,13 +304,14 @@ async def _try_heartbeat() -> None:
                         else:
                             tool_result = await mcp_call_tool(fn_name, fn_args)
 
+                    from ..tool_log import log_tool_call
+                    log_tool_call("heartbeat", fn_name, fn_args, tool_result)
+
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
                         "content": tool_result,
                     })
-
-                payload["messages"] = messages
 
         # 超过最大工具轮次
         logger.warning("心跳: 工具调用轮次达上限")

@@ -203,13 +203,15 @@ async def handle_group_chat(event: GroupMessageEvent):
                         else:
                             tool_result = await call_tool(fn_name, fn_args)
 
+                    from ..tool_log import log_tool_call
+                    log_tool_call("group", fn_name, fn_args, tool_result,
+                                  user_id=str(event.user_id), group_id=group_id)
+
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
                         "content": tool_result,
                     })
-
-                payload["messages"] = messages
 
             # 超过最大轮次
             reply = "（工具调用轮次已达上限，请重新提问）"
