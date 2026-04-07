@@ -391,4 +391,11 @@ async def compact_history(
         f"提取记忆 {sum(len(v) for v in extractions.values())} 条"
     )
 
+    # Step 5: 主动刷新记忆索引（把新摘要和新记忆条目尽早索引进去）
+    try:
+        from ..memory.indexer import ensure_index
+        await ensure_index()
+    except Exception as e:
+        logger.debug(f"Compaction 后索引刷新跳过: {e}")
+
     return True
