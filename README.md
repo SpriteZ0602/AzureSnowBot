@@ -1,6 +1,6 @@
 # AzureSnowBot
 
-基于 NapCat + NoneBot2 的 QQ 智能 Agent Bot。支持多轮对话、人格切换、MCP 工具调用、渐进式披露 Skill 系统、本地工具注册、对话压缩、仿真人分条发送、Web Dashboard 管理面板。
+基于 NapCat + NoneBot2 的 QQ 智能 Agent Bot。支持群聊/私聊使用。
 
 ## 功能
 
@@ -20,7 +20,7 @@
 | @Bot `/skill <名称>` | 查看技能详情 |
 | @Bot `/skill reload` | 重新扫描技能目录 |
 | @Bot `/compact` | 压缩对话历史（手动触发） |
-| @Bot `/取名 @某人 [条数]` | 根据聊天记录起群昵称（Sub-Agent） |
+| @Bot `/取名 @某人 [条数]` | 根据聊天记录起群昵称 |
 | @Bot `/help` | 显示帮助信息 |
 
 ### 私聊（仅 Admin）
@@ -32,7 +32,6 @@
 | 任意消息 | 调用 LLM 进行多轮对话（支持引用消息 + 完整工具链） |
 | `/reset` | 清空对话历史 |
 | `/compact` | 压缩对话历史（手动触发压缩 + 记忆提取） |
-| `ping` | 回复 `pong~`，检测 Bot 是否在线 |
 
 ### 人格系统
 
@@ -338,7 +337,7 @@ PORT=8082
 LLM_PROVIDER=gemini
 
 # （可选）覆盖默认模型和接口地址:
-# LLM_MODEL=gemini-2.5-flash-preview-05-20
+# LLM_MODEL=gemini-3-flash-preview
 # LLM_BASE_URL=
 
 # API Keys（只需填写当前 provider 对应的即可）
@@ -354,8 +353,8 @@ ADMIN_NUMBER=你的QQ号
 
 | Provider | 默认模型 | 默认 Base URL | 所需 Key 变量 |
 |----------|----------|-------------|------------|
-| `gemini` | `gemini-2.5-flash-preview-05-20` | `generativelanguage.googleapis.com/v1beta/openai` | `gemini_api_key` |
-| `openai` | `gpt-4o` | `api.openai.com/v1` | `openai_api_key` |
+| `gemini` | `gemini-3-flash-preview` | `generativelanguage.googleapis.com/v1beta/openai` | `gemini_api_key` |
+| `openai` | `gpt-5.4` | `api.openai.com/v1` | `openai_api_key` |
 | `qwen` | `qwen-plus` | `dashscope.aliyuncs.com/compatible-mode/v1` | `qwen_api_key` |
 
 其他配置项：
