@@ -9,3 +9,6 @@ data/admin/config.json
 data/admin/history.jsonl
 data/admin/SOUL.md
 data/reminders.json
+data/tool_calls.jsonl
+data/admin/token_stats.json
+data/admin/.memory_index.json
