@@ -32,6 +32,7 @@ from ..skill.manager import (
 )
 from .proactive import reset_idle_timer, cancel_idle_timer
 from .compaction import compact_history, should_compact
+from ..group.utils import fetch_quoted_image_urls
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
@@ -245,6 +246,7 @@ async def handle_chat(event: PrivateMessageEvent):
 
     # 检查是否引用了消息
     quoted_text = ""
+    quoted_image_urls: list[str] = []
     reply_id = None
     if event.reply:
         reply_id = event.reply.message_id
@@ -263,16 +265,30 @@ async def handle_chat(event: PrivateMessageEvent):
             elif isinstance(raw_msg, list):
                 parts = [seg.get("data", {}).get("text", "") for seg in raw_msg if isinstance(seg, dict) and seg.get("type") == "text"]
                 quoted_text = "".join(parts).strip()
+            # 获取引用消息中的图片
+            quoted_image_urls = await fetch_quoted_image_urls(bot, reply_id)
         except Exception as e:
             logger.warning(f"获取引用消息失败: {e}")
 
-    # 记录用户消息（带引用内容）
+    # 记录用户消息（带引用内容，纯文本）
     if quoted_text:
-        content = f"(引用了一条消息: \"{quoted_text}\"): {user_input}"
+        content = f'(引用了一条消息: "{quoted_text}"): {user_input}'
     else:
         content = user_input
     user_msg = {"role": "user", "content": content}
     append_message(user_id, user_msg)
+
+    # 如果引用的消息包含图片，构建多模态 content（仅用于 LLM 请求，不存历史）
+    if quoted_image_urls:
+        multimodal_content: list[dict] = [{"type": "text", "text": content}]
+        for img_url in quoted_image_urls:
+            multimodal_content.append({
+                "type": "image_url",
+                "image_url": {"url": img_url},
+            })
+        llm_user_msg = {"role": "user", "content": multimodal_content}
+    else:
+        llm_user_msg = user_msg
 
     # 加载历史 → 压缩（如需要） → 截断
     history = load_history(user_id)
@@ -294,7 +310,16 @@ async def handle_chat(event: PrivateMessageEvent):
     cfg = _load_config(user_id)
     last = cfg.get("last_message_at", "")
     prompt += build_runtime_context(chat_type="private", last_message_at=last)
-    messages = [{"role": "system", "content": prompt}] + trimmed
+
+    # 组装 messages：最后一条用 LLM 版本（可能含图片），其余用纯文本
+    messages = [{"role": "system", "content": prompt}] + trimmed[:-1]
+    if trimmed:
+        if quoted_image_urls and trimmed[-1].get("content") == content:
+            messages.append(llm_user_msg)
+        else:
+            messages.append(trimmed[-1])
+    elif quoted_image_urls:
+        messages.append(llm_user_msg)
 
     # DEBUG: 打印组装好的完整 prompt
     logger.debug("=== 私聊 Prompt 开始 ===")
