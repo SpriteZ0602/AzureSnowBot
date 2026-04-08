@@ -400,4 +400,25 @@ async def compact_history(
     except Exception as e:
         logger.debug(f"Compaction 后索引刷新跳过: {e}")
 
+    # Step 6: 结构化蒸馏（用小模型从摘要中提取结构化知识条目）
+    try:
+        from ..memory.structured import distill_memories
+        memories_jsonl = memory_path.parent / "memories.jsonl"
+        await distill_memories(summary, memories_jsonl)
+    except Exception as e:
+        logger.debug(f"Compaction 后结构化蒸馏跳过: {e}")
+
+    # Step 7: 重置蒸馏水位线（Compaction 重写了 history，行数全变了）
+    try:
+        import json as _json
+        cfg_path = session_path.parent / "config.json"
+        if cfg_path.exists():
+            cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
+        else:
+            cfg = {}
+        cfg["last_distill_line"] = len(new_messages)
+        cfg_path.write_text(_json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.debug(f"重置蒸馏水位线失败: {e}")
+
     return True

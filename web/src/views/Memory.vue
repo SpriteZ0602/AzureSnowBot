@@ -83,6 +83,59 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- 结构化记忆面板（仅 admin） -->
+    <el-card v-if="scope === 'admin'" shadow="hover" class="structured-card">
+      <template #header>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span>结构化记忆 (memories.jsonl) — 共 {{ structuredData.total }} 条</span>
+          <div style="display: flex; gap: 8px;">
+            <el-select v-model="structuredTypeFilter" placeholder="全部类型" clearable size="small" style="width: 130px" @change="loadStructured">
+              <el-option value="" label="全部类型" />
+              <el-option value="identity" label="identity" />
+              <el-option value="preference" label="preference" />
+              <el-option value="fact" label="fact" />
+              <el-option value="task" label="task" />
+              <el-option value="emotion" label="emotion" />
+            </el-select>
+            <el-input v-model="structuredKeyword" placeholder="关键词..." size="small" clearable style="width: 150px" @keyup.enter="loadStructured" />
+            <el-button size="small" @click="loadStructured">筛选</el-button>
+          </div>
+        </div>
+      </template>
+
+      <!-- 类型统计 -->
+      <div v-if="Object.keys(structuredData.type_counts).length" class="type-stats">
+        <el-tag
+          v-for="(count, type) in structuredData.type_counts"
+          :key="type"
+          :type="typeTagColor(type as string)"
+          size="small"
+          style="margin-right: 8px;"
+        >
+          {{ type }}: {{ count }}
+        </el-tag>
+      </div>
+
+      <!-- 条目列表 -->
+      <el-table :data="structuredData.entries" stripe size="small" v-if="structuredData.entries.length">
+        <el-table-column label="类型" width="110">
+          <template #default="{ row }">
+            <el-tag :type="typeTagColor(row.type)" size="small">{{ row.type }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="subject" label="主题" width="150" show-overflow-tooltip />
+        <el-table-column prop="value" label="内容" show-overflow-tooltip />
+        <el-table-column prop="confidence" label="置信度" width="80" />
+        <el-table-column prop="updated" label="更新时间" width="110" />
+        <el-table-column label="过期" width="100">
+          <template #default="{ row }">
+            {{ row.expires || '-' }}
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="暂无结构化记忆（Compaction 或心跳时自动生成）" />
+    </el-card>
   </div>
 </template>
 
@@ -100,6 +153,22 @@ const searching = ref(false)
 const searched = ref(false)
 const searchResults = ref<any[]>([])
 const indexStatus = ref({ exists: false, chunks: 0 })
+const structuredData = ref<{ total: number; type_counts: Record<string, number>; entries: any[] }>({
+  total: 0, type_counts: {}, entries: [],
+})
+const structuredTypeFilter = ref('')
+const structuredKeyword = ref('')
+
+function typeTagColor(type: string): string {
+  const map: Record<string, string> = {
+    identity: 'danger',
+    preference: 'warning',
+    fact: '',
+    task: 'success',
+    emotion: 'info',
+  }
+  return map[type] || ''
+}
 
 const scopeLabel = computed(() => {
   const s = scopes.value.find((s) => s.id === scope.value)
@@ -120,7 +189,10 @@ function onScopeChange() {
   loadMemory()
   searchResults.value = []
   searched.value = false
-  if (scope.value === 'admin') loadIndexStatus()
+  if (scope.value === 'admin') {
+    loadIndexStatus()
+    loadStructured()
+  }
 }
 
 async function saveMemory() {
@@ -163,10 +235,25 @@ async function loadIndexStatus() {
   }
 }
 
+async function loadStructured() {
+  try {
+    const { data } = await api.get('/memory/structured', {
+      params: {
+        type_filter: structuredTypeFilter.value,
+        keyword: structuredKeyword.value,
+      },
+    })
+    structuredData.value = data
+  } catch {
+    // ignore
+  }
+}
+
 onMounted(() => {
   loadScopes()
   loadMemory()
   loadIndexStatus()
+  loadStructured()
 })
 </script>
 
@@ -202,5 +289,11 @@ onMounted(() => {
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
+}
+.structured-card {
+  margin-top: 20px;
+}
+.type-stats {
+  margin-bottom: 12px;
 }
 </style>

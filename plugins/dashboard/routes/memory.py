@@ -121,3 +121,36 @@ async def get_index_status(_user: str = Depends(get_current_user)):
         }
     except (json.JSONDecodeError, OSError):
         return {"exists": False, "chunks": 0}
+
+
+@router.get("/structured")
+async def get_structured_memories(
+    type_filter: str = Query("", description="按类型过滤: identity/preference/fact/task/emotion"),
+    keyword: str = Query("", description="按关键词过滤"),
+    limit: int = Query(100, ge=1, le=500),
+    _user: str = Depends(get_current_user),
+):
+    """查看结构化记忆条目"""
+    from ...memory.structured import search_memories
+
+    memories_path = Path("data/admin/memories.jsonl")
+    entries = search_memories(
+        memories_path,
+        type_filter=type_filter,
+        keyword=keyword,
+        limit=limit,
+    )
+
+    # 统计各类型数量
+    from ...memory.structured import load_memories
+    all_entries = load_memories(memories_path)
+    type_counts: dict[str, int] = {}
+    for e in all_entries:
+        t = e.get("type", "unknown")
+        type_counts[t] = type_counts.get(t, 0) + 1
+
+    return {
+        "total": len(all_entries),
+        "type_counts": type_counts,
+        "entries": entries,
+    }

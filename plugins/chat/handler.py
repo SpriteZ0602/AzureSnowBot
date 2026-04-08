@@ -64,6 +64,16 @@ def load_admin_prompt() -> str:
             content = fpath.read_text(encoding="utf-8").strip()
             if content:
                 sections.append(f"# {filename}\n{content}")
+
+    # 注入结构化记忆中的核心身份信息
+    try:
+        from ..memory.structured import load_identity_memories
+        identity_text = load_identity_memories(ADMIN_DIR / "memories.jsonl")
+        if identity_text:
+            sections.append(identity_text)
+    except Exception:
+        pass
+
     return "\n\n".join(sections) if sections else ""
 
 

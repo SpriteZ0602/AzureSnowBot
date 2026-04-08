@@ -66,7 +66,7 @@ def _build_heartbeat_instruction() -> str:
         "距离你们上次对话已经过去了一段时间。请根据上面的心跳任务和你的记忆，决定要做什么。\n"
         "你可以：\n"
         "1. 调用工具（读写记忆、整理文件等）— 执行完后如果不需要发消息就回复 HEARTBEAT_OK\n"
-        "2. 主动给碧碧发消息（继续之前的话题、关心他、提醒重要事项等）— 直接输出消息内容\n"
+        "2. 主动给对方发消息（继续之前的话题、关心他、提醒重要事项等）— 直接输出消息内容\n"
         "3. 什么都不需要做 — 只回复 HEARTBEAT_OK（仅这个词，不要加其他内容）\n\n"
         "注意：不要编造不存在的事情。真没什么事就 HEARTBEAT_OK，不用强行找话聊。"
     )
@@ -308,4 +308,32 @@ async def _try_heartbeat() -> None:
 
     except Exception as e:
         logger.error(f"心跳 LLM 调用失败: {e}")
+
+    # ── 结构化蒸馏（增量）──
+    try:
+        from .handler import load_history, _load_config, _save_config
+        from ..memory.structured import distill_memories
+
+        all_history = load_history(ADMIN_NUMBER)
+        cfg = _load_config(ADMIN_NUMBER)
+        last_line = cfg.get("last_distill_line", 0)
+
+        if len(all_history) > last_line:
+            new_messages = all_history[last_line:]
+            # 格式化为文本
+            text_parts: list[str] = []
+            for msg in new_messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "user":
+                    text_parts.append(f"用户: {content}")
+                elif role == "assistant":
+                    text_parts.append(f"助手: {content}")
+            if text_parts:
+                memories_path = Path("data/admin/memories.jsonl")
+                await distill_memories("\n".join(text_parts), memories_path)
+                cfg["last_distill_line"] = len(all_history)
+                _save_config(ADMIN_NUMBER, cfg)
+    except Exception as e:
+        logger.debug(f"心跳蒸馏跳过: {e}")
 

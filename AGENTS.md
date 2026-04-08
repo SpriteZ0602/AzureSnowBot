@@ -249,34 +249,92 @@ spec.loader.exec_module(mod)
 - 安全约束：所有工具均 `admin_only=True`，群聊 LLM 不可见
 - `runtime_context.py` 为私聊注入完整环境信息（OS、Shell、Workspace、Git）
 
-### 3. 长期记忆 RAG（优先级：高）
+### 3. 长期记忆 RAG（已完成）
 
-**目标**: MEMORY.md 增长后，通过向量语义搜索按需检索记忆，而不是全量注入 system prompt。
+**已实现**:
+- `memory_search` 工具：Embedding（Gemini text-embedding-004）+ BM25 混合搜索 + MMR 去重 + 时间衰减
+- 向量索引存储为 `.memory_index.json`，同时索引 MEMORY.md 和 history.jsonl
+- Compaction 后自动刷新索引
+- 启动时预热索引（`_warmup_index()`）
 
-**实现方向**:
-- 添加 `memory_search` 工具（基于 Embedding 语义搜索）
-- 添加 `memory_get` 工具（精确行读取）
-- 当前 `read_file`/`write_file` 工具保留作为手动读写记忆的备选
-- System prompt 中 MEMORY.md 改为摘要注入或完全去掉，改由工具检索
-- 参考 OpenClaw 的 memory_search + memory_get 两步走架构
+### 4. 图片理解 / 多模态（部分完成）
 
-### 4. 图片理解 / 多模态（优先级：中）
+**已完成**: 群聊 + 私聊引用消息图片识别（`fetch_quoted_image_urls` + 多模态 content）。
 
-**状态**: 群聊引用消息图片识别已完成（`fetch_quoted_image_urls` + 多模态 content）。私聊 + 直接发送图片尚未支持。
+**未完成**: 直接发送图片识别（私聊直接发图不响应，群聊直接发图不响应——均为设计决策，非缺失）。
 
-**适用**: 私聊 + 群聊均需要。
+### 5. 结构化记忆蒸馏（优先级：高）
 
-**实现方向**:
-- 在消息事件中提取图片 URL / base64
-- 构造 multimodal content 格式（OpenAI vision API 格式）
-- Gemini 的 multimodal 接口略有不同，可能需要在 `llm.py` 加适配层
-- `runtime_context.py` 的 Channel capabilities 已包含 "图片"
+**目标**: Compaction 和心跳时用小模型将对话中的事实性知识蒸馏为结构化条目，只追加到 `memories.jsonl`，不去重（条目体积小、膨胀可控），写入前严格校验质量。
 
-### 5. 各类 Skill 扩展（优先级：中）
+**架构**:
+
+```
+写入侧（两个触发点）：
+
+  Compaction 触发时：
+    大模型 ──→ 对话摘要（已有）
+    大模型 ──→ MEMORY.md 自由文本追加（已有）
+    小模型 ──→ 从摘要中蒸馏 → 追加 memories.jsonl（新增）
+    重置水位线 last_distill_line = len(压缩后 history)
+
+  心跳触发时：
+    取增量消息 history[last_distill_line:]
+    如果有新消息 → 小模型蒸馏 → 追加 memories.jsonl
+    更新水位线 last_distill_line = len(history)
+
+读取侧（memory_search 工具）：
+  向量索引 ──→ 同时索引 MEMORY.md + history.jsonl（已有）
+  结构化检索 ──→ 加载 memories.jsonl，按 type/关键词过滤
+
+System prompt 常驻注入：
+  ──→ memories.jsonl 中 type=identity 的少量核心条目
+```
+
+**水位线机制**:
+- `config.json` 新增 `last_distill_line` 字段，记录上次蒸馏时 history.jsonl 的行数
+- 心跳蒸馏时只取 `history[last_distill_line:]` 作为增量输入，避免重复蒸馏
+- Compaction 会重写 history.jsonl（摘要 + 保留尾部），必须重置水位线到压缩后的新行数
+
+**写入质量控制（宁缺毋滥）**:
+- 蒸馏 prompt 要求只提取**高置信度的事实性信息**，闲聊/模棱两可的内容不提取
+- 小模型输出后严格 JSON 校验：缺 type/subject/value 的丢弃
+- `confidence=low` 的条目直接丢弃，不写入
+- 每条加 `updated` 时间戳
+
+**不去重的理由**:
+- 每条 ~100 字，一个月几百条，几十 KB，膨胀可控
+- 避免去重合并逻辑误删有效信息
+- 读取时按时间排序，最新的自然排前面
+- 实现极简，不需要额外 API 调用
+
+**数据格式** (`data/admin/memories.jsonl`，每行一条):
+```json
+{"type": "preference", "subject": "编程语言", "value": "偏好 Python，常用 async/await", "confidence": "high", "updated": "2026-03-28"}
+{"type": "fact", "subject": "当前任务", "value": "正在开发 QQ Bot 项目", "expires": "2026-06", "updated": "2026-03-28"}
+{"type": "identity", "subject": "基本信息", "value": "Bot 管理员，常在晚上活跃", "updated": "2026-04-01"}
+```
+
+**字段说明**:
+- `type`: `identity`（身份信息）、`preference`（偏好）、`fact`（事实）、`task`（进行中的任务）、`emotion`（情感记录）
+- `subject`: 知识主题（自由文本，不做枚举约束）
+- `value`: 知识内容
+- `confidence`: `high` / `medium`（low 不写入）
+- `expires`: 可选，过期日期（过期后检索时自动跳过）
+- `updated`: 最后更新时间
+
+**实现步骤**:
+1. 新建 `plugins/memory/structured.py`：`distill_memories(text, memories_path)` 核心函数 — 调用小模型蒸馏 + 校验 + 追加写入
+2. 修改 `plugins/chat/compaction.py`：`compact_history()` 末尾调用 `distill_memories(摘要文本, ...)`，重置水位线
+3. 修改 `plugins/chat/proactive.py`：心跳末尾取增量消息，调用 `distill_memories(增量消息, ...)`，更新水位线
+4. 修改 `load_admin_prompt()`：从 `memories.jsonl` 中提取 `type=identity` 的条目注入 system prompt
+5. 修改 `memory_search` 工具：增加结构化过滤模式（按 type/关键词查询 memories.jsonl）
+
+**小模型选择**: `gemini-2.0-flash-lite`（或同级别小模型），蒸馏任务本质是信息提取，不需要强推理，小模型够用且省成本。
+
+**Compaction 蒸馏输入**: 复用 Compaction 第 1 步已经生成的对话摘要（~1K token），不传原始被压缩消息，避免小模型输入过长。
 
 **适用**: 私聊 + 群聊共享。
-
-在 `data/skills/` 中持续添加新技能。Skill 系统已完善（三层渐进式披露），只需写 `SKILL.md` + 可选 `references/` 即可。
 
 ### 6. 主动发言扩展到群聊（优先级：低）
 

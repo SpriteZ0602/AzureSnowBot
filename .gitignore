@@ -12,5 +12,6 @@ data/reminders.json
 data/tool_calls.jsonl
 data/admin/token_stats.json
 data/admin/.memory_index.json
+data/admin/memories.jsonl
 web/node_modules/
 web/dist/

@@ -899,7 +899,7 @@ async def web_search_tool(query: str = "", num_results: int = 5, **kwargs) -> st
     description=(
         "语义搜索长期记忆和历史对话。"
         "当需要回忆之前聊过的内容、查找用户偏好、回顾过去的决定或约定时使用。"
-        "返回最相关的记忆片段及其来源。"
+        "同时搜索自由文本记忆和结构化知识库，返回最相关的结果。"
     ),
     admin_only=True,
     parameters={
@@ -907,11 +907,15 @@ async def web_search_tool(query: str = "", num_results: int = 5, **kwargs) -> st
         "properties": {
             "query": {
                 "type": "string",
-                "description": "搜索内容，用自然语言描述要找什么，例如: 碧碧喜欢什么、上次讨论的架构方案",
+                "description": "搜索内容，用自然语言描述要找什么，例如: 用户喜欢什么、上次讨论的架构方案",
             },
             "max_results": {
                 "type": "integer",
                 "description": "最多返回几条结果，默认 5",
+            },
+            "type_filter": {
+                "type": "string",
+                "description": "按类型过滤结构化记忆，可选: identity/preference/fact/task/emotion，留空搜全部",
             },
         },
         "required": ["query"],
@@ -920,6 +924,7 @@ async def web_search_tool(query: str = "", num_results: int = 5, **kwargs) -> st
 async def memory_search_tool(
     query: str = "",
     max_results: int = 5,
+    type_filter: str = "",
     _context: dict | None = None,
     **kwargs,
 ) -> str:
@@ -929,24 +934,46 @@ async def memory_search_tool(
     if not query:
         return "[错误] 请提供搜索内容"
 
-    from ..memory.indexer import search
+    results_parts: list[str] = []
 
+    # 1. 结构化记忆搜索
     try:
-        results = await search(query, max_results=max_results)
-    except Exception as e:
-        return f"[错误] 记忆搜索失败: {e}"
+        from ..memory.structured import search_memories
+        structured = search_memories(
+            Path("data/admin/memories.jsonl"),
+            type_filter=type_filter,
+            keyword=query,
+            limit=max_results,
+        )
+        if structured:
+            lines: list[str] = []
+            for e in structured:
+                lines.append(
+                    f"[{e.get('type', '?')}/{e.get('subject', '?')}] "
+                    f"{e.get('value', '')} (更新: {e.get('updated', '?')})"
+                )
+            results_parts.append("── 结构化记忆 ──\n" + "\n".join(lines))
+    except Exception:
+        pass
 
-    if not results:
+    # 2. 向量语义搜索（MEMORY.md + history.jsonl）
+    try:
+        from ..memory.indexer import search
+        vector_results = await search(query, max_results=max_results)
+        if vector_results:
+            lines = []
+            for r in vector_results:
+                source = Path(r["source"]).name
+                score = r["score"]
+                text = r["text"]
+                if len(text) > 500:
+                    text = text[:500] + "..."
+                lines.append(f"[{source} L{r['start_line']}-{r['end_line']}] (相关度 {score})\n{text}")
+            results_parts.append("── 语义搜索 ──\n" + "\n\n".join(lines))
+    except Exception as e:
+        results_parts.append(f"── 语义搜索失败: {e} ──")
+
+    if not results_parts:
         return f"未找到与「{query}」相关的记忆"
 
-    lines: list[str] = []
-    for r in results:
-        source = Path(r["source"]).name
-        score = r["score"]
-        text = r["text"]
-        # 截断过长的片段
-        if len(text) > 500:
-            text = text[:500] + "..."
-        lines.append(f"[{source} L{r['start_line']}-{r['end_line']}] (相关度 {score})\n{text}")
-
-    return f"记忆搜索结果（{len(results)} 条，查询: {query}）:\n\n" + "\n\n".join(lines)
+    return f"记忆搜索结果（查询: {query}）:\n\n" + "\n\n".join(results_parts)
