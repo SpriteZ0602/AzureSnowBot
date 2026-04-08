@@ -50,7 +50,7 @@ _PROVIDERS: dict[str, dict[str, str]] = {
         "key_attr": "qwen_api_key",
         "key_env": "QWEN_API_KEY",
         "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "default_model": "qwen-plus",
+        "default_model": "qwen3.6-plus-2026-04-02",
     },
 }
 

@@ -25,9 +25,9 @@ from ..llm import API_KEY, BASE_URL, LLM_PROVIDER
 # ──────────────────── 小模型配置 ────────────────────
 # 蒸馏用小模型，按 provider 选择
 _SMALL_MODELS: dict[str, str] = {
-    "gemini": "gemini-2.0-flash-lite",
-    "openai": "gpt-4o-mini",
-    "qwen": "qwen-turbo",
+    "gemini": "gemini-3.1-flash-lite-preview",
+    "openai": "gpt-5-mini",
+    "qwen": "qwen3.5-flash",
 }
 
 DISTILL_TIMEOUT = 60
