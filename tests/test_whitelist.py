@@ -193,6 +193,7 @@ class TestListWithFlags:
         mgr = types.ModuleType("plugins.persona.manager")
         mgr.get_listen_all = lambda gid: gid == "100"
         mgr.get_group_proactive = lambda gid: gid == "200"
+        mgr.get_auto_trigger = lambda gid: False
         monkeypatch.setitem(sys.modules, "plugins.persona.manager", mgr)
         return mgr
 

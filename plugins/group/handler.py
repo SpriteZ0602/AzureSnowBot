@@ -211,6 +211,8 @@ async def _handle_group_chat(
                     bot = get_bot()
                     chunks = chunk_text(reply)
                     await send_chunked(bot, event, chunks)
+                    from .chatter import note_bot_reply
+                    note_bot_reply(group_id)
                     # Bot 刚在群里发言，延后该群的主动对话心跳（仅开启时）
                     if get_group_proactive(group_id):
                         reset_group_proactive_timer(f"group:{group_id}")
@@ -269,6 +271,8 @@ async def _handle_group_chat(
             bot = get_bot()
             chunks = chunk_text(reply)
             await send_chunked(bot, event, chunks)
+            from .chatter import note_bot_reply
+            note_bot_reply(group_id)
             # Bot 刚在群里发言，延后该群的主动对话心跳（仅开启时）
             if get_group_proactive(group_id):
                 reset_group_proactive_timer(f"group:{group_id}")

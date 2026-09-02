@@ -44,3 +44,5 @@ async def _shutdown():
 from . import handler as handler     # noqa: E402, F401
 from . import commands as commands   # noqa: E402, F401
 from . import chatlog as chatlog     # noqa: E402, F401
+from . import repeater as repeater   # noqa: E402, F401
+from . import chatter as chatter     # noqa: E402, F401

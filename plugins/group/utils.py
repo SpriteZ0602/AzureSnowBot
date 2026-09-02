@@ -203,13 +203,16 @@ def handle_whitelist_command(text: str) -> str:
         if not groups:
             return "白名单为空。"
 
-        from ..persona.manager import get_listen_all, get_group_proactive
+        from ..persona.manager import get_listen_all, get_group_proactive, get_auto_trigger
 
         lines: list[str] = []
         for g in groups:
             listen = "开" if get_listen_all(g) else "关"
             proactive = "开" if get_group_proactive(g) else "关"
-            lines.append(f"- {g}　全量对话: {listen}　主动对话: {proactive}")
+            trigger = "开" if get_auto_trigger(g) else "关"
+            lines.append(
+                f"- {g}　全量对话: {listen}　主动对话: {proactive}　复读插话: {trigger}"
+            )
         return f"白名单中的群（{len(groups)} 个）:\n" + "\n".join(lines)
 
     if cmd == "add":

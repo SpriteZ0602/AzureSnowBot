@@ -228,6 +228,21 @@ def set_group_proactive(group_id: str, enabled: bool) -> None:
     _save_group_config(group_id, config)
 
 
+# ──────────────────── 群聊复读 / 插话开关 ────────────────────
+
+def get_auto_trigger(group_id: str) -> bool:
+    """该群是否开启复读和热闹插话（无需 @ 的主动触发），默认关闭。"""
+    config = _load_group_config(group_id)
+    return bool(config.get("auto_trigger_enabled", False))
+
+
+def set_auto_trigger(group_id: str, enabled: bool) -> None:
+    """设置该群的复读 / 插话开关"""
+    config = _load_group_config(group_id)
+    config["auto_trigger_enabled"] = bool(enabled)
+    _save_group_config(group_id, config)
+
+
 # ──────────────────── 会话持久化（按 persona 隔离） ────────────────────
 
 def load_history(group_id: str, persona_name: str | None = None) -> list[dict]:

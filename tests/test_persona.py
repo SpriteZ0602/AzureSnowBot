@@ -260,3 +260,24 @@ class TestListenAll:
         """不同群的监听开关互不影响"""
         pm.set_listen_all("999", True)
         assert pm.get_listen_all("888") is False
+
+
+# ──────────────────── 复读 / 插话开关 ────────────────────
+
+class TestAutoTrigger:
+
+    def test_default_off(self, isolated_dirs):
+        assert pm.get_auto_trigger("999") is False
+
+    def test_set_on_and_read(self, isolated_dirs):
+        pm.set_auto_trigger("999", True)
+        assert pm.get_auto_trigger("999") is True
+
+    def test_persisted_to_config_json(self, isolated_dirs):
+        pm.set_auto_trigger("999", True)
+        cfg = pm.get_group_config("999")
+        assert cfg.get("auto_trigger_enabled") is True
+
+    def test_per_group_isolation(self, isolated_dirs):
+        pm.set_auto_trigger("999", True)
+        assert pm.get_auto_trigger("888") is False
