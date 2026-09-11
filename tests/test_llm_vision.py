@@ -2,8 +2,9 @@
 tests/test_llm_vision.py
 ────────────────────────
 测试 llm.py 的多模态能力标志（SUPPORTS_VISION）:
-  - deepseek（无视觉模型）→ 关闭识图
-  - gemini 等其他 provider → 开启识图
+  - deepseek 2026-09 起已支持视觉 → 开启识图
+  - gemini / openai 等其他 provider → 开启识图
+  - 不支持视觉的 provider 应加进 _NON_VISION_PROVIDERS
 
 每个 provider 用独立模块名加载 llm.py，避免与 test_llm_fallback 的模块缓存冲突。
 """
@@ -54,11 +55,12 @@ def _load_llm(provider: str):
 
 class TestSupportsVision:
 
-    def test_deepseek_disables_vision(self):
-        """deepseek 无视觉模型 → 关闭识图"""
+    def test_deepseek_enables_vision(self):
+        """deepseek 已支持视觉，识图应开启；默认模型为 deepseek-flash"""
         mod = _load_llm("deepseek")
         assert mod.LLM_PROVIDER == "deepseek"
-        assert mod.SUPPORTS_VISION is False
+        assert mod.SUPPORTS_VISION is True
+        assert mod.MODEL == "deepseek-flash"
 
     def test_gemini_enables_vision(self):
         mod = _load_llm("gemini")

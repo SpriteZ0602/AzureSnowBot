@@ -368,7 +368,7 @@ ADMIN_NUMBER=你的QQ号
 
 | Provider | 默认模型 | 默认 Base URL | 所需 Key 变量 |
 |----------|----------|-------------|------------|
-| `deepseek`（默认） | `deepseek-v4-pro` | `api.deepseek.com` | `deepseek_api_key` |
+| `deepseek`（默认） | `deepseek-flash` | `api.deepseek.com` | `deepseek_api_key` |
 | `gemini` | `gemini-3-flash-preview` | `generativelanguage.googleapis.com/v1beta/openai` | `gemini_api_key` |
 | `openai` | `gpt-5.4` | `api.openai.com/v1` | `openai_api_key` |
 | `qwen` | `qwen-plus` | `dashscope.aliyuncs.com/compatible-mode/v1` | `qwen_api_key` |

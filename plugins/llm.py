@@ -34,8 +34,9 @@ LLM_PROVIDER: str = (
 ).strip().lower()
 
 # ──────────────────── 能力标志 ────────────────────
-# 多模态（识图）：deepseek 暂无视觉模型，向它发 image_url 会报错，需关闭
-_NON_VISION_PROVIDERS = {"deepseek"}
+# 多模态（识图）：deepseek 2026-09 起已支持视觉。若某 provider 不支持，
+# 向它发 image_url 会报错，把它的名字加进 _NON_VISION_PROVIDERS 关闭识图
+_NON_VISION_PROVIDERS: set[str] = set()
 SUPPORTS_VISION: bool = LLM_PROVIDER not in _NON_VISION_PROVIDERS
 
 # ──────────────────── Provider 配置表 ────────────────────
@@ -62,7 +63,7 @@ _PROVIDERS: dict[str, dict[str, str]] = {
         "key_attr": "deepseek_api_key",
         "key_env": "DEEPSEEK_API_KEY",
         "default_base_url": "https://api.deepseek.com",
-        "default_model": "deepseek-v4-flash",
+        "default_model": "deepseek-flash",
     }
 }
 
