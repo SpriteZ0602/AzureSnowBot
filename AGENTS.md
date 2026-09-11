@@ -74,11 +74,13 @@ data/
 │   ├── MEMORY.md              #   长期记忆
 │   ├── config.json            #   {"last_message_at": "..."}
 │   └── history.jsonl          #   对话历史
-├── sessions/groups/<gid>/     # 群聊
-│   ├── config.json            #   {"active_persona": "...", "last_message_at": "..."}
-│   ├── <persona>.jsonl        #   对话历史（按人格隔离）
-│   ├── _chatlog.jsonl         #   全量群聊记录
-│   └── personas/              #   群私有人格
+├── sessions/                  # 群聊会话数据
+│   ├── chatlog.db             # 全量聊天记录 SQLite（chatlog_db.py，365 天保留）
+│   └── groups/<gid>/
+│       ├── config.json        #   {"active_persona": "...", "last_message_at": "..."}
+│       ├── <persona>.jsonl    #   对话历史（按人格隔离）
+│       ├── _chatlog.jsonl     #   （已废弃）迁移前旧记录，确认后可删
+│       └── personas/          #   群私有人格
 ├── personas/                  # 通用人格 prompt
 ├── skills/                    # 技能目录
 ├── mcp_servers.json
@@ -143,7 +145,8 @@ plugins/
 ├── proactive.py        # 心跳 + 主动发言引擎（私聊 & 群聊，keyed 计时器）
 ├── group/              # 群聊
 │   ├── handler.py      #   对话处理 + Agentic Loop
-│   ├── chatlog.py      #   全量消息记录
+│   ├── chatlog.py      #   全量消息旁路记录器（nonebot 层，写入 SQLite）
+│   ├── chatlog_db.py   #   聊天记录 SQLite 存储层（无 nonebot 依赖，可独立加载）
 │   ├── commands.py     #   /reset, /compact, /取名, /help
 │   └── utils.py        #   白名单、工具函数
 ├── persona/            # 人格系统
@@ -218,29 +221,21 @@ spec.loader.exec_module(mod)
 
 ## 待实现功能 & 重构路线
 
-### 1. 群聊全量记录检索工具（优先级：高）
+### 1. 群聊全量记录检索（已完成）
 
-**状态**: 记录器 (`plugins/group/chatlog.py`) 已完成，工具尚未实现。
+**状态**: 记录器、检索工具、SQLite 落库均已完成。
 
-**实现方案**: 在 `plugins/local_tools/tools.py` 添加 `get_group_chat_log` 工具：
-```python
-@register_tool(
-    name="get_group_chat_log",
-    description="检索群聊的历史消息记录，可按发送者/关键词/时间筛选。",
-    parameters={
-        "type": "object",
-        "properties": {
-            "user_name": {"type": "string", "description": "发送者昵称（模糊匹配）"},
-            "keyword":   {"type": "string", "description": "消息内容关键词"},
-            "hours":     {"type": "number", "description": "查看最近 N 小时（默认 24）"},
-            "limit":     {"type": "integer", "description": "最多返回条数（默认 50）"},
-        },
-    },
-)
-```
-- 调用 `chatlog.load_chatlog(group_id, ...)` 获取数据
-- `group_id` 从 `kwargs["_target_id"]` 获取（handler 自动传入的工具上下文）
-- **注意**: `tools.py` 中不需要 `import time`，`load_chatlog()` 内部自己处理时间过滤
+- **记录器**: `plugins/group/chatlog.py`（nonebot 旁路，白名单群所有消息）
+- **存储**: `plugins/group/chatlog_db.py` → `data/sessions/chatlog.db`（SQLite，
+  `(group_id, ts)` 索引；`UNIQUE(group_id, ts, uid, text)` 保证迁移幂等）。
+  保留期 `RETENTION_DAYS = 365`，bot 启动时自动清理（`@driver.on_startup`）
+- **检索**: `get_group_chat_log` 工具（`tools.py`，按发送者/QQ号/关键词/时间窗）；
+  chatter、`/查记录` 指令、Dashboard 共用 `chatlog_db.load_chatlog()`，
+  返回 `{ts, uid, name, text}` 字典列表，按时间正序取最新 limit 条
+- **旧 JSONL 迁移**: `python scripts/migrate_chatlog_to_db.py`（幂等，可重复跑；
+  原 `_chatlog.jsonl` 保留不动，确认后手动删除）
+- **注意**: `chatlog_db.py` 不依赖 nonebot（迁移脚本直接按文件路径加载）；
+  `tools.py` 中不需要 `import time`，`load_chatlog()` 内部自己处理时间过滤
 
 ### 2. 电脑操控工具（已完成，仅 Admin 私聊）
 

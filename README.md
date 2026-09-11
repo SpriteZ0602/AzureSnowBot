@@ -138,13 +138,15 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 
 ### 群聊全量记录
 
-旁路记录白名单群内所有消息（不仅限 @Bot），供后续工具按需检索：
+旁路记录白名单群内所有消息（不仅限 @Bot），供工具与 Dashboard 按需检索：
 
-- 存储位置：`data/sessions/groups/<gid>/_chatlog.jsonl`
-- 每行格式：`{"ts": 1711000000, "uid": "123", "name": "昵称", "text": "消息内容"}`
-- 自动清理超过 7 天的旧记录
-- 支持按时间、发送者、关键词过滤查询
+- 存储位置：`data/sessions/chatlog.db`（SQLite，所有群共用一张 `messages` 表）
+- 字段：`ts` / `uid` / `name` / `text`，`(group_id, ts)` 索引加速检索
+- 自动清理超过 365 天的旧记录（bot 启动时执行）
+- 支持按时间、发送者（昵称/QQ号）、关键词过滤查询
 - 不会传入 LLM 的普通请求，仅在工具调用时按需加载
+- 旧 JSONL 记录（`data/sessions/groups/<gid>/_chatlog.jsonl`）可通过
+  `python scripts/migrate_chatlog_to_db.py` 幂等迁移入库
 
 ### 心跳 + 主动发言（Heartbeat + Proactive Messaging）
 
@@ -240,7 +242,8 @@ AzureSnowBot/
 │   │   └── proactive.py           #     心跳 + 主动发言（完整工具链）
 │   ├── group/                     #   群聊对话
 │   │   ├── handler.py             #     消息处理 + Agentic Loop
-│   │   ├── chatlog.py             #     全量群聊记录（旁路存储）
+│   │   ├── chatlog.py             #     全量群聊记录器（旁路，写入 SQLite）
+│   │   ├── chatlog_db.py          #     聊天记录 SQLite 存储层（无 nonebot 依赖）
 │   │   ├── commands.py            #     /reset, /compact, /help
 │   │   └── utils.py               #     白名单、工具函数
 │   ├── persona/                   #   人格管理
@@ -292,11 +295,12 @@ AzureSnowBot/
 │   │   ├── token_stats.json       #   Token 用量统计数据
 │   │   ├── config.json            #   {"last_message_at": "..."}
 │   │   └── history.jsonl          #   对话历史
-│   ├── sessions/groups/           # 群聊会话
-│       └── <group_id>/
+│   ├── sessions/                  # 群聊会话数据
+│   │   ├── chatlog.db             # 全量群聊记录 SQLite（chatlog_db.py）
+│   │   └── groups/<group_id>/
 │           ├── config.json        #   {"active_persona": "...", "last_message_at": "..."}
 │           ├── <persona>.jsonl    #   对话历史（按人格隔离）
-│           ├── _chatlog.jsonl     #   全量群聊记录
+│           ├── _chatlog.jsonl     #   （已废弃）迁移前旧记录，确认后可删
 │           └── personas/          #   群私有人格
 ├── web/                           # Web Dashboard 前端
 │   ├── package.json               #   Vue 3 + Vite + Element Plus + ECharts
