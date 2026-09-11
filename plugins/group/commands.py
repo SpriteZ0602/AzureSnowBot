@@ -19,7 +19,7 @@ from ..persona.manager import (
     get_group_proactive, set_group_proactive,
     load_persona_prompt, get_group_config, group_memory_path,
 )
-from ..runtime_context import build_runtime_context
+from ..runtime_context import build_runtime_context, build_time_context
 from .utils import in_whitelist, is_at_bot, is_group_event
 
 # ──────────────────── /reset ────────────────────
@@ -303,8 +303,9 @@ async def handle_tarot(event: GroupMessageEvent):
     if not system_prompt:
         system_prompt = "你是一个有用的助手，请用中文回答用户的问题。"
     cfg = get_group_config(group_id)
-    system_prompt += build_runtime_context(
-        chat_type="group", last_message_at=cfg.get("last_message_at", "")
+    # 一次性请求，无跨轮缓存诉求，时间行直接拼在 system 里
+    system_prompt += build_runtime_context(chat_type="group") + "\n" + build_time_context(
+        cfg.get("last_message_at", "")
     )
 
     # 加载本群 + 当前人格的历史，让解读能结合上下文

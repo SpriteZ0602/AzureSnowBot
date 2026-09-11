@@ -94,31 +94,36 @@ sys.modules["plugins.runtime_context"] = _rc_mod
 _rc_spec.loader.exec_module(_rc_mod)
 
 import pytest
-from plugins.runtime_context import build_runtime_context, _build_tools_summary
+from plugins.runtime_context import build_runtime_context, build_time_context, _build_tools_summary
 
 
 # ──────────────────── 时间上下文 ────────────────────
 
 class TestTimeContext:
+    """时间行已从 build_runtime_context 拆出——动态内容不能进 system prompt，
+    否则 LLM prefix cache 在 system 处断掉，整个对话历史每轮 miss"""
 
-    def test_includes_current_time(self):
+    def test_runtime_context_has_no_time(self):
+        """静态段不应包含任何时间信息"""
         result = build_runtime_context(chat_type="private")
+        assert "当前时间" not in result
+        assert "上次对话" not in result
+
+    def test_time_context_includes_current_time(self):
+        result = build_time_context()
         assert "当前时间:" in result
 
-    def test_includes_weekday(self):
-        result = build_runtime_context(chat_type="private")
+    def test_time_context_includes_weekday(self):
+        result = build_time_context()
         weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
         assert any(w in result for w in weekdays)
 
-    def test_includes_last_message_at(self):
-        result = build_runtime_context(
-            chat_type="private",
-            last_message_at="2026-03-26 12:00:00",
-        )
+    def test_time_context_includes_last_message_at(self):
+        result = build_time_context("2026-03-26 12:00:00")
         assert "上次对话: 2026-03-26 12:00:00" in result
 
-    def test_omits_last_message_when_empty(self):
-        result = build_runtime_context(chat_type="private", last_message_at="")
+    def test_time_context_omits_last_message_when_empty(self):
+        result = build_time_context("")
         assert "上次对话" not in result
 
 

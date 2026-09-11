@@ -16,7 +16,7 @@ from nonebot.exception import FinishedException
 from nonebot.log import logger
 
 from ..chunker import chunk_text, send_chunked
-from ..runtime_context import build_runtime_context
+from ..runtime_context import build_runtime_context, build_time_context
 from ..local_tools.manager import (
     get_openai_tools as local_openai_tools,
     handle_tool_call as local_handle_tool_call,
@@ -422,8 +422,9 @@ async def handle_tarot_private(event: PrivateMessageEvent):
     # 第二步：Admin 人格 + 运行时上下文 → LLM 解读（与主 handler 同拼法）
     system_prompt = load_admin_prompt() or _FALLBACK_PROMPT
     cfg = _load_config(user_id)
-    system_prompt += build_runtime_context(
-        chat_type="private", last_message_at=cfg.get("last_message_at", "")
+    # 一次性请求，无跨轮缓存诉求，时间行直接拼在 system 里
+    system_prompt += build_runtime_context(chat_type="private") + "\n" + build_time_context(
+        cfg.get("last_message_at", "")
     )
 
     asker = getattr(event, "sender", None)
@@ -542,6 +543,9 @@ async def handle_chat(event: PrivateMessageEvent):
         except Exception as e:
             logger.warning(f"获取引用消息失败: {e}")
 
+    # 上次对话时间必须在 append_message 之前读取，否则拿到的是本次时间
+    last = _load_config(user_id).get("last_message_at", "")
+
     # 记录用户消息（带引用内容，纯文本）
     if quoted_text:
         content = f'(引用了一条消息: "{quoted_text}"): {user_input}'
@@ -579,9 +583,7 @@ async def handle_chat(event: PrivateMessageEvent):
     skill_catalog = skill_catalog_prompt()
     if skill_catalog:
         prompt += "\n" + skill_catalog
-    cfg = _load_config(user_id)
-    last = cfg.get("last_message_at", "")
-    prompt += build_runtime_context(chat_type="private", last_message_at=last)
+    prompt += build_runtime_context(chat_type="private")
 
     # 组装 messages：最后一条用 LLM 版本（可能含图片），其余用纯文本
     messages = [{"role": "system", "content": prompt}] + trimmed[:-1]
@@ -592,6 +594,11 @@ async def handle_chat(event: PrivateMessageEvent):
             messages.append(trimmed[-1])
     elif quoted_image_urls:
         messages.append(llm_user_msg)
+
+    # 动态时间行每轮都变，作为独立 system 消息放在 messages 最末尾。
+    # 绝不能拼进 system prompt——那会让 prefix cache 在 system 处断掉，
+    # 整个对话历史每轮缓存全部 miss。
+    messages.append({"role": "system", "content": build_time_context(last)})
 
     # DEBUG: 打印组装好的完整 prompt
     logger.debug("=== 私聊 Prompt 开始 ===")

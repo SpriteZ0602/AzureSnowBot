@@ -17,7 +17,7 @@ from nonebot.exception import FinishedException
 from nonebot.log import logger
 
 from ..chunker import chunk_text, send_chunked
-from ..runtime_context import build_runtime_context
+from ..runtime_context import build_runtime_context, build_time_context
 from ..persona.manager import (
     get_active_persona, load_persona_prompt,
     load_history, append_message, get_group_config,
@@ -122,10 +122,10 @@ async def _handle_group_chat(
     if skill_catalog:
         system_prompt += "\n" + skill_catalog
 
-    # 注入运行时上下文
+    # 注入运行时上下文（静态段；动态时间行见 messages 末尾）
     group_cfg = get_group_config(group_id)
     last = group_cfg.get("last_message_at", "")
-    system_prompt += build_runtime_context(chat_type="group", last_message_at=last)
+    system_prompt += build_runtime_context(chat_type="group")
 
     # 构建工具调用上下文（供需要环境信息的工具使用，如定时提醒）
     _tool_context = {
@@ -182,6 +182,14 @@ async def _handle_group_chat(
             messages.append(trimmed[-1])
     elif quoted_image_urls:
         messages.append(llm_user_msg)
+
+    # 动态时间行每轮都变，作为独立 system 消息放在 messages 最末尾。
+    # 绝不能拼进 system prompt——那会让 prefix cache 在 system 处断掉，
+    # 整个对话历史每轮缓存全部 miss。
+    messages.append({
+        'role': 'system',
+        'content': build_time_context(last),
+    })
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",

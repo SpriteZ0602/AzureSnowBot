@@ -37,7 +37,7 @@
 - **私聊仅限 Admin**：非 Admin 用户私聊会收到“请在群里跟我聊天哦~”提示。
 - **群聊**: `data/sessions/groups/<gid>/<persona>.jsonl`，按人格隔离。配置在 `data/sessions/groups/<gid>/config.json`（含 `active_persona` + `last_message_at`）。
 - **消息格式**: `{"role": "user", "content": "你好"}`，纯净的 role/content 格式，不嵌入时间戳。
-- **时间上下文**: 每次组装 LLM 请求时，在 system prompt 末尾追加当前时间和上次对话时间（从 `config.json` 的 `last_message_at` 读取），如 `"\n当前时间: 2026-03-26 14:30:00（星期四），上次对话: 2026-03-26 12:00:00"`。这样 LLM 能感知时间但不会在回复中复述时间戳。
+- **时间上下文**: 动态时间行（当前时间 + 上次对话时间，`last_message_at` 取自 `config.json`）由 `runtime_context.build_time_context()` 生成，**作为独立的 system 消息追加在 messages 数组最末尾**（私聊/群聊主对话）。绝不能拼进 system prompt——LLM 的 prefix cache 按最长公共前缀匹配，秒级时间每轮都变，放 system 里会让整段对话历史每轮缓存全部 miss（2026-09 修复的性能问题）。心跳/塔罗/取名等一次性请求仍拼在 system 里，无影响。这样 LLM 能感知时间但不会在回复中复述时间戳。
 - **config.json**: 每次 `append_message()` 同时更新 `last_message_at` 字段，用于时间上下文和主动发言功能。
 - 私聊由 `plugins/chat/handler.py` 管理 `load_history` / `append_message` / `trim_history`（仅 Admin）。
 - 运行时上下文由 `plugins/runtime_context.py` 统一构建，私聊/群聊共用。
@@ -407,7 +407,7 @@ class SessionStore:
 - 环境变量在 `.env` 中定义，通过 `get_driver().config` 访问（NoneBot2 会自动加载 `.env`）
 - 路径用 `pathlib.Path`，不用字符串拼接
 - 对话历史格式：JSONL，每行 `{"role": "...", "content": "..."}`
-- 时间上下文通过 system prompt 末尾动态注入，不存储在消息中
+- 时间上下文通过 messages 末尾的独立 system 消息动态注入，不存储在消息中、也不进 system prompt（保 LLM prefix cache 命中）
 
 ## 常用操作
 

@@ -67,6 +67,10 @@ def record_usage(source: str, usage: dict | None) -> None:
     prompt = usage.get("prompt_tokens", 0) or 0
     completion = usage.get("completion_tokens", 0) or 0
     total = usage.get("total_tokens", 0) or (prompt + completion)
+    # DeepSeek 返回 prompt_cache_hit_tokens / prompt_cache_miss_tokens，
+    # 用于在 Dashboard 观察缓存命中率（其他 provider 可能没有这两个字段）
+    cache_hit = usage.get("prompt_cache_hit_tokens", 0) or 0
+    cache_miss = usage.get("prompt_cache_miss_tokens", 0) or 0
     today = datetime.now().strftime("%Y-%m-%d")
 
     with _lock:
@@ -82,6 +86,8 @@ def record_usage(source: str, usage: dict | None) -> None:
         entry["completion"] += completion
         entry["total"] += total
         entry["calls"] += 1
+        entry["cache_hit"] = entry.get("cache_hit", 0) + cache_hit
+        entry["cache_miss"] = entry.get("cache_miss", 0) + cache_miss
 
         _save_stats()
 

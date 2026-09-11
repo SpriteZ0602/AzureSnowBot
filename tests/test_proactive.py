@@ -121,7 +121,8 @@ _save_and_set("plugins.skill.manager", _mock_skill_manager)
 
 # mock plugins.runtime_context
 _mock_runtime_context = types.ModuleType("plugins.runtime_context")
-_mock_runtime_context.build_runtime_context = MagicMock(return_value="\n当前时间: 2026-03-26 12:00:00（星期四）")
+_mock_runtime_context.build_runtime_context = MagicMock(return_value="\nRuntime: model=test-model")
+_mock_runtime_context.build_time_context = MagicMock(return_value="当前时间: 2026-03-26 12:00:00（星期四）")
 _save_and_set("plugins.runtime_context", _mock_runtime_context)
 
 # mock plugins.chat.handler（私聊心跳的会话上下文）

@@ -32,7 +32,7 @@ from ..persona.manager import (
     load_persona_prompt,
 )
 from ..proactive import reset_idle_timer
-from ..runtime_context import build_runtime_context
+from ..runtime_context import build_runtime_context, build_time_context
 from .chatlog import load_chatlog
 from .utils import get_session_lock, in_whitelist, is_at_bot, is_group_event, trim_history
 
@@ -156,7 +156,7 @@ async def _generate_chime(group_id: str) -> str:
         prompt += "\n\n" + group_memory
 
     last = get_group_config(group_id).get("last_message_at", "")
-    prompt += build_runtime_context(chat_type="group", last_message_at=last)
+    prompt += build_runtime_context(chat_type="group") + "\n" + build_time_context(last)
 
     entries = load_chatlog(group_id, hours=WINDOW_SECONDS / 3600, limit=RECENT_LOG_LIMIT)
     if entries:

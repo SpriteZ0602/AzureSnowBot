@@ -466,6 +466,7 @@ def _is_heartbeat_ok(text: str) -> bool:
 
 
 def _runtime_context(chat_type: str, last_message_at: str) -> str:
-    """构建运行时上下文（延迟导入，避免循环引用）"""
-    from .runtime_context import build_runtime_context
-    return build_runtime_context(chat_type=chat_type, last_message_at=last_message_at)
+    """构建运行时上下文（延迟导入，避免循环引用）。
+    心跳是一次性请求，无跨轮缓存诉求，时间行直接拼在 system 里。"""
+    from .runtime_context import build_runtime_context, build_time_context
+    return build_runtime_context(chat_type=chat_type) + "\n" + build_time_context(last_message_at)
