@@ -31,6 +31,9 @@ _ALLOWED_ROOTS = [
 # 群聊记忆根目录：data/groups/<群号>/
 GROUP_MEMORY_ROOT = Path("data/groups")
 
+# 群聊单次写入上限（群成员可影响 LLM，限制爆炸半径；私聊 Admin 不限）
+GROUP_WRITE_MAX_CHARS = 20_000
+
 
 def _check_scope(context: dict | None) -> tuple[str, str | None]:
     """校验工具调用场景，返回 (chat_type, error_msg)。
@@ -70,6 +73,9 @@ def _resolve_safe_path(filepath: str, context: dict | None = None) -> tuple[Path
     """
     解析文件路径并检查是否在允许目录内（按场景动态决定）。
     返回 (resolved_path, error_msg)，error_msg 为 None 表示安全。
+
+    群聊额外支持相对本群目录的路径（如 "MEMORY.md"）——LLM 不需要知道群号；
+    最终路径仍必须落在 data/groups/<群号>/ 内，".." 与绝对路径逃逸一律拒绝。
     """
     chat_type, err = _check_scope(context)
     if err:
@@ -79,30 +85,45 @@ def _resolve_safe_path(filepath: str, context: dict | None = None) -> tuple[Path
     if err:
         return Path(), err
 
-    try:
-        target = Path(filepath).resolve()
-    except Exception:
-        return Path(), f"[错误] 无效路径: {filepath}"
+    # 候选路径：先按原样解析；群聊再尝试按"相对本群目录"解析。
+    # 以 data/ 开头的路径视为项目根相对路径，保持严格校验不 fallback
+    # （防止 "data/groups/<其他群>/..." 被嵌套解析进本群目录）。
+    candidates = [filepath]
+    if (
+        chat_type == "group"
+        and filepath
+        and not filepath.startswith("data/")
+        and not Path(filepath).is_absolute()
+    ):
+        candidates.append(str(roots[0] / filepath))
 
-    # 检查是否在允许目录内
-    for allowed in roots:
-        allowed_abs = allowed.resolve()
+    last_target = Path()
+    for candidate in candidates:
         try:
-            target.relative_to(allowed_abs)
-            return target, None
-        except ValueError:
-            continue
+            target = Path(candidate).resolve()
+        except Exception:
+            return Path(), f"[错误] 无效路径: {filepath}"
+
+        last_target = target
+        # 检查是否在允许目录内
+        for allowed in roots:
+            allowed_abs = allowed.resolve()
+            try:
+                target.relative_to(allowed_abs)
+                return target, None
+            except ValueError:
+                continue
 
     allowed_str = ", ".join(str(r) for r in roots)
-    return target, f"[错误] 路径不在允许范围内。允许的目录: {allowed_str}"
+    return last_target, f"[错误] 路径不在允许范围内。允许的目录: {allowed_str}"
 
 
 @register_tool(
     name="read_file",
     description=(
-        "读取指定文件的内容。路径相对于项目根目录。"
-        "私聊：仅限 data/admin/、data/skills/、data/personas/ 目录（查看 MEMORY.md、USER.md 等）。"
-        "群聊：仅限 data/groups/<当前群号>/ 目录（查看本群长期记忆 MEMORY.md）。"
+        "读取指定文件的内容。"
+        "私聊：路径相对于项目根，仅限 data/admin/、data/skills/、data/personas/ 目录（查看 MEMORY.md、USER.md 等）。"
+        "群聊：仅限本群记忆目录，直接传相对路径即可（如 MEMORY.md），无需知道群号。"
         "用途：查看记忆文件的当前内容。"
     ),
     parameters={
@@ -110,7 +131,7 @@ def _resolve_safe_path(filepath: str, context: dict | None = None) -> tuple[Path
         "properties": {
             "path": {
                 "type": "string",
-                "description": "文件路径（相对于项目根），例如: data/admin/MEMORY.md 或 data/groups/123456/MEMORY.md",
+                "description": "文件路径。私聊: 相对于项目根（如 data/admin/MEMORY.md）；群聊: 相对本群目录（如 MEMORY.md）",
             },
         },
         "required": ["path"],
@@ -147,9 +168,9 @@ async def read_file_tool(
 @register_tool(
     name="write_file",
     description=(
-        "写入内容到指定文件（覆盖写入）。路径相对于项目根目录。"
-        "私聊：仅限 data/admin/、data/skills/、data/personas/ 目录（更新 MEMORY.md 长期记忆、USER.md 用户档案等）。"
-        "群聊：仅限 data/groups/<当前群号>/ 目录（写本群长期记忆 MEMORY.md）。"
+        "写入内容到指定文件（覆盖写入）。"
+        "私聊：路径相对于项目根，仅限 data/admin/、data/skills/、data/personas/ 目录（更新 MEMORY.md 长期记忆、USER.md 用户档案等）。"
+        "群聊：仅限本群记忆目录，直接传相对路径即可（如 MEMORY.md），无需知道群号。"
         "注意：会覆盖文件全部内容，写入前建议先 read_file 查看当前内容。"
     ),
     parameters={
@@ -157,7 +178,7 @@ async def read_file_tool(
         "properties": {
             "path": {
                 "type": "string",
-                "description": "文件路径（相对于项目根），例如: data/admin/MEMORY.md 或 data/groups/123456/MEMORY.md",
+                "description": "文件路径。私聊: 相对于项目根（如 data/admin/MEMORY.md）；群聊: 相对本群目录（如 MEMORY.md）",
             },
             "content": {
                 "type": "string",
@@ -182,6 +203,11 @@ async def write_file_tool(
     target, err = _resolve_safe_path(path, _context)
     if err:
         return err
+    if chat_type == "group" and len(content) > GROUP_WRITE_MAX_CHARS:
+        return (
+            f"[错误] 内容过长（{len(content)} 字符），"
+            f"群聊单次写入上限 {GROUP_WRITE_MAX_CHARS} 字符"
+        )
 
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -194,16 +220,16 @@ async def write_file_tool(
 @register_tool(
     name="list_files",
     description=(
-        "列出指定目录下的文件和子目录。路径相对于项目根目录。"
-        "私聊：仅限 data/admin/、data/skills/、data/personas/ 目录。"
-        "群聊：仅限 data/groups/<当前群号>/ 目录（本群记忆目录）。"
+        "列出指定目录下的文件和子目录。"
+        "私聊：路径相对于项目根，仅限 data/admin/、data/skills/、data/personas/ 目录。"
+        "群聊：仅限本群记忆目录，传 . 即可列出本群目录。"
     ),
     parameters={
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "目录路径（相对于项目根），例如: data/admin 或 data/groups/123456",
+                "description": "目录路径。私聊: 相对于项目根（如 data/admin）；群聊: 相对本群目录（如 .）",
             },
         },
         "required": ["path"],

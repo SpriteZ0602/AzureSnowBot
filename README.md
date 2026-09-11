@@ -109,9 +109,9 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 | `random_number` | 生成指定范围的随机整数 |
 | `set_reminder` | 一次性定时提醒（"X分钟后提醒我做Y"） |
 | `set_daily_reminder` | 每日定时提醒（"每天9点提醒我签到"） |
-| `read_file` | 读取文件内容（仅 Admin 私聊，限 data/ 目录） |
-| `write_file` | 写入文件内容（仅 Admin 私聊，限 data/ 目录） |
-| `list_files` | 列出目录文件（仅 Admin 私聊，限 data/ 目录） |
+| `read_file` | 读取文件内容。私聊（Admin）限 data/admin/、data/skills/、data/personas/；群聊限本群 data/groups/&lt;群号&gt;/（直接传相对路径如 MEMORY.md） |
+| `write_file` | 写入文件内容（覆盖）。范围同 read_file；群聊单次写入上限 20000 字符 |
+| `list_files` | 列出目录文件。范围同 read_file |
 | `cancel_reminder` | 取消已设置的提醒（一次性/每日） |
 | `list_reminders` | 查看当前对话的待触发提醒 |
 | `get_group_chat_log` | 检索群聊历史消息（按昵称/QQ号/关键词/时间筛选） |

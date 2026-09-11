@@ -246,8 +246,8 @@ spec.loader.exec_module(mod)
 
 **已实现**:
 - `run_command` — 执行本地 shell 命令（PowerShell/sh），超时 30s，输出截断 4000 字符
-- `read_file` / `write_file` / `list_files` — 文件系统操作（白名单目录限制）
-- 安全约束：所有工具均 `admin_only=True`，群聊 LLM 不可见
+- `read_file` / `write_file` / `list_files` — 文件系统操作。私聊（Admin）限 `data/admin/`、`data/skills/`、`data/personas/`；群聊仅限本群 `data/groups/<群号>/` 目录（传相对路径如 `MEMORY.md` 自动定位；`..`/绝对路径/`data/` 开头越界路径一律拒绝；群聊单次写入上限 20000 字符）
+- 安全约束：`run_command` 等 `admin_only=True` 的工具群聊 LLM 不可见；文件工具群聊可见但被路径 jail 限制在本群目录内
 - `runtime_context.py` 为私聊注入完整环境信息（OS、Shell、Workspace、Git）
 
 ### 3. 长期记忆 RAG（代码在，当前未启用）

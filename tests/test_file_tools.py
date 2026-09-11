@@ -24,6 +24,18 @@ sys.modules.setdefault("nonebot.adapters", MagicMock())
 sys.modules.setdefault("nonebot.adapters.onebot", MagicMock())
 sys.modules.setdefault("nonebot.adapters.onebot.v11", MagicMock())
 
+# 本文件会 import 真实 plugins.llm（经 memory_search → indexer），其 import 期
+# 校验 provider，需给 mock driver 配合法值，否则单跑本文件时报错
+_mock_config = MagicMock()
+_mock_config.group_whitelist = []
+_mock_config.llm_provider = "deepseek"
+_mock_config.deepseek_api_key = ""
+_mock_config.llm_base_url = ""
+_mock_config.llm_model = ""
+_mock_driver = MagicMock()
+_mock_driver.config = _mock_config
+sys.modules["nonebot"].get_driver = MagicMock(return_value=_mock_driver)
+
 import pytest
 from plugins.local_tools.tools import (
     read_file_tool,
@@ -135,6 +147,42 @@ class TestResolveSafePathGroup:
 
     def test_no_context_rejected(self):
         _, err = _resolve_safe_path("data/admin/MEMORY.md")
+        assert err is not None
+
+
+class TestResolveSafePathGroupRelative:
+    """群聊相对路径：LLM 无需知道群号，传相对路径即可命中本群目录"""
+
+    def test_relative_memory_md_resolves_into_group_dir(self):
+        target, err = _resolve_safe_path("MEMORY.md", GROUP_CTX)
+        assert err is None
+        assert str(target).replace("\\", "/").endswith(f"data/groups/{GROUP_ID}/MEMORY.md")
+
+    def test_relative_dot_resolves_to_group_dir(self):
+        target, err = _resolve_safe_path(".", GROUP_CTX)
+        assert err is None
+        assert str(target).replace("\\", "/").endswith(f"data/groups/{GROUP_ID}")
+
+    def test_relative_subpath_resolves_into_group_dir(self):
+        target, err = _resolve_safe_path("notes/abc.md", GROUP_CTX)
+        assert err is None
+        assert str(target).replace("\\", "/").endswith(f"data/groups/{GROUP_ID}/notes/abc.md")
+
+    def test_data_prefixed_other_group_still_rejected(self):
+        """以 data/ 开头的路径严格按项目根校验，不被嵌套解析进本群目录"""
+        _, err = _resolve_safe_path(f"data/groups/{GROUP_ID}9/MEMORY.md", GROUP_CTX)
+        assert err is not None
+
+    def test_relative_traversal_still_blocked(self):
+        _, err = _resolve_safe_path("../admin/MEMORY.md", GROUP_CTX)
+        assert err is not None
+
+    def test_relative_deep_traversal_blocked(self):
+        _, err = _resolve_safe_path("sub/../../../admin/MEMORY.md", GROUP_CTX)
+        assert err is not None
+
+    def test_absolute_path_outside_group_rejected(self):
+        _, err = _resolve_safe_path("C:/Windows/System32/cmd.exe", GROUP_CTX)
         assert err is not None
 
 
@@ -252,6 +300,24 @@ class TestReadFileToolGroup:
             _context=GROUP_CTX,
         )
         assert "不存在" in result
+
+    @pytest.mark.asyncio
+    async def test_read_group_memory_relative_path(self, tmp_path):
+        """群聊传相对路径 MEMORY.md 即可读到本群记忆（无需知道群号）"""
+        from plugins.local_tools import tools
+        original_root = tools.GROUP_MEMORY_ROOT
+        original_roots = tools._ALLOWED_ROOTS
+        tools.GROUP_MEMORY_ROOT = tmp_path
+        tools._ALLOWED_ROOTS = []
+        try:
+            mem = tmp_path / GROUP_ID / "MEMORY.md"
+            mem.parent.mkdir(parents=True)
+            mem.write_text("相对路径群记忆", encoding="utf-8")
+            result = await read_file_tool(path="MEMORY.md", _context=GROUP_CTX)
+            assert "相对路径群记忆" in result
+        finally:
+            tools.GROUP_MEMORY_ROOT = original_root
+            tools._ALLOWED_ROOTS = original_roots
 
 
 # ──────────────────── write_file_tool ────────────────────
@@ -393,6 +459,63 @@ class TestWriteFileToolGroup:
             _context=ctx,
         )
         assert "错误" in result
+
+    @pytest.mark.asyncio
+    async def test_write_group_memory_relative_path(self, tmp_path):
+        """群聊传相对路径 MEMORY.md 写入本群记忆"""
+        from plugins.local_tools import tools
+        original_root = tools.GROUP_MEMORY_ROOT
+        original_roots = tools._ALLOWED_ROOTS
+        tools.GROUP_MEMORY_ROOT = tmp_path
+        tools._ALLOWED_ROOTS = []
+        try:
+            result = await write_file_tool(
+                path="MEMORY.md",
+                content="相对路径写入",
+                _context=GROUP_CTX,
+            )
+            assert "已写入" in result
+            written = (tmp_path / GROUP_ID / "MEMORY.md").read_text(encoding="utf-8")
+            assert written == "相对路径写入"
+        finally:
+            tools.GROUP_MEMORY_ROOT = original_root
+            tools._ALLOWED_ROOTS = original_roots
+
+    @pytest.mark.asyncio
+    async def test_group_write_size_cap(self, tmp_path):
+        """群聊单次写入超上限应拒绝且不落盘"""
+        from plugins.local_tools import tools
+        original_root = tools.GROUP_MEMORY_ROOT
+        original_roots = tools._ALLOWED_ROOTS
+        tools.GROUP_MEMORY_ROOT = tmp_path
+        tools._ALLOWED_ROOTS = []
+        try:
+            result = await write_file_tool(
+                path="MEMORY.md",
+                content="x" * (tools.GROUP_WRITE_MAX_CHARS + 1),
+                _context=GROUP_CTX,
+            )
+            assert "上限" in result
+            assert not (tmp_path / GROUP_ID / "MEMORY.md").exists()
+        finally:
+            tools.GROUP_MEMORY_ROOT = original_root
+            tools._ALLOWED_ROOTS = original_roots
+
+    @pytest.mark.asyncio
+    async def test_private_write_not_capped(self, tmp_path):
+        """私聊 Admin 写入不受群聊上限限制"""
+        from plugins.local_tools import tools
+        original = tools._ALLOWED_ROOTS
+        tools._ALLOWED_ROOTS = [tmp_path]
+        try:
+            result = await write_file_tool(
+                path=str(tmp_path / "big.md"),
+                content="x" * (tools.GROUP_WRITE_MAX_CHARS + 1),
+                _context=PRIVATE_CTX,
+            )
+            assert "已写入" in result
+        finally:
+            tools._ALLOWED_ROOTS = original
 
 
 # ──────────────────── list_files_tool ────────────────────
