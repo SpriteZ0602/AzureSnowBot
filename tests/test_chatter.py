@@ -28,6 +28,11 @@ sys.modules.setdefault("nonebot.adapters.onebot.v11", MagicMock())
 
 _mock_config = MagicMock()
 _mock_config.group_whitelist = []
+# chatter.py 会 import 真实 plugins.llm，其 import 期校验 provider，需给合法值
+_mock_config.llm_provider = "deepseek"
+_mock_config.deepseek_api_key = ""
+_mock_config.llm_base_url = ""
+_mock_config.llm_model = ""
 _mock_driver = MagicMock()
 _mock_driver.config = _mock_config
 sys.modules["nonebot"].get_driver = MagicMock(return_value=_mock_driver)
@@ -35,16 +40,8 @@ _matcher = MagicMock()
 _matcher.handle = lambda: lambda f: f
 sys.modules["nonebot"].on_message = MagicMock(return_value=_matcher)
 
-for name in (
-    "plugins.chunker",
-    "plugins.llm",
-    "plugins.persona.manager",
-    "plugins.proactive",
-    "plugins.runtime_context",
-    "plugins.group.chatlog",
-):
-    sys.modules.setdefault(name, MagicMock())
-
+# 注意：这里不要把 plugins.* 公共模块塞 MagicMock 进 sys.modules，
+# 否则同会话里后收集的 test_chunker / test_dashboard_memory 会拿到假模块。
 _plugins_pkg = types.ModuleType("plugins")
 _plugins_pkg.__path__ = [str(ROOT / "plugins")]
 sys.modules.setdefault("plugins", _plugins_pkg)

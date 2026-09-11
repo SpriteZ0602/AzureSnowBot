@@ -35,18 +35,45 @@ _mock_driver.config = _mock_config
 sys.modules["nonebot"].get_driver = MagicMock(return_value=_mock_driver)
 sys.modules["nonebot"].get_bot = MagicMock(return_value=MagicMock())
 
+
+# ── sys.modules 快照/还原 ──
+# 本文件在收集期用桩模块覆盖多个 plugins.* 公共模块。proactive.py 加载完就还原，
+# 之后仅在运行期懒加载需要时（每个测试 setup）临时装回，防止 mock 泄漏给
+# 同会话的其他测试文件（test_chunker / test_dashboard_memory 等）。
+_ORIGINAL_MODULES: dict = {}
+_STUBBED_MODULES: dict = {}
+
+
+def _save_and_set(name: str, mod) -> None:
+    if name not in _ORIGINAL_MODULES:
+        _ORIGINAL_MODULES[name] = sys.modules.get(name)
+    sys.modules[name] = mod
+
+
+def _install_stubs() -> None:
+    for name, mod in _STUBBED_MODULES.items():
+        sys.modules[name] = mod
+
+
+def _restore_modules() -> None:
+    for name, mod in _ORIGINAL_MODULES.items():
+        if mod is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = mod
+
 # ── 构造 plugins 包 ──
 _plugins_pkg = types.ModuleType("plugins")
 _plugins_pkg.__path__ = [str(ROOT / "plugins")]
 _plugins_pkg.__package__ = "plugins"
-sys.modules["plugins"] = _plugins_pkg
+_save_and_set("plugins", _plugins_pkg)
 
 
 def _make_pkg(name: str, path: str) -> types.ModuleType:
     pkg = types.ModuleType(name)
     pkg.__path__ = [path]
     pkg.__package__ = name
-    sys.modules[name] = pkg
+    _save_and_set(name, pkg)
     return pkg
 
 
@@ -54,7 +81,7 @@ def _make_pkg(name: str, path: str) -> types.ModuleType:
 _mock_chunker = types.ModuleType("plugins.chunker")
 _mock_chunker.chunk_text = lambda text: [text] if text else []
 _mock_chunker.send_chunked_raw = AsyncMock()
-sys.modules["plugins.chunker"] = _mock_chunker
+_save_and_set("plugins.chunker", _mock_chunker)
 
 # mock plugins.llm
 _mock_llm = types.ModuleType("plugins.llm")
@@ -64,7 +91,7 @@ _mock_llm.MODEL = "test-model"
 _mock_llm.LLM_PROVIDER = "deepseek"
 _mock_llm.SUPPORTS_VISION = False
 _mock_llm.call_llm = AsyncMock(return_value={"choices": [{"message": {"content": ""}}], "usage": {}})
-sys.modules["plugins.llm"] = _mock_llm
+_save_and_set("plugins.llm", _mock_llm)
 
 # mock plugins.local_tools.manager
 _make_pkg("plugins.local_tools", str(ROOT / "plugins" / "local_tools"))
@@ -72,7 +99,7 @@ _mock_lt_manager = types.ModuleType("plugins.local_tools.manager")
 _mock_lt_manager.get_openai_tools = MagicMock(return_value=[])
 _mock_lt_manager.handle_tool_call = AsyncMock(return_value=None)
 _mock_lt_manager.list_tools_summary = MagicMock(return_value=[])
-sys.modules["plugins.local_tools.manager"] = _mock_lt_manager
+_save_and_set("plugins.local_tools.manager", _mock_lt_manager)
 
 # mock plugins.mcp.manager
 _make_pkg("plugins.mcp", str(ROOT / "plugins" / "mcp"))
@@ -81,7 +108,7 @@ _mock_mcp_manager.get_openai_tools = MagicMock(return_value=[])
 _mock_mcp_manager.call_tool = AsyncMock(return_value="")
 _mock_mcp_manager.MAX_TOOL_ROUNDS = 10
 _mock_mcp_manager.list_tools_summary = MagicMock(return_value=[])
-sys.modules["plugins.mcp.manager"] = _mock_mcp_manager
+_save_and_set("plugins.mcp.manager", _mock_mcp_manager)
 
 # mock plugins.skill.manager
 _make_pkg("plugins.skill", str(ROOT / "plugins" / "skill"))
@@ -90,12 +117,12 @@ _mock_skill_manager.get_openai_tools = MagicMock(return_value=[])
 _mock_skill_manager.handle_tool_call = MagicMock(return_value=None)
 _mock_skill_manager.list_skills_summary = MagicMock(return_value=[])
 _mock_skill_manager.build_catalog_prompt = MagicMock(return_value="")
-sys.modules["plugins.skill.manager"] = _mock_skill_manager
+_save_and_set("plugins.skill.manager", _mock_skill_manager)
 
 # mock plugins.runtime_context
 _mock_runtime_context = types.ModuleType("plugins.runtime_context")
 _mock_runtime_context.build_runtime_context = MagicMock(return_value="\n当前时间: 2026-03-26 12:00:00（星期四）")
-sys.modules["plugins.runtime_context"] = _mock_runtime_context
+_save_and_set("plugins.runtime_context", _mock_runtime_context)
 
 # mock plugins.chat.handler（私聊心跳的会话上下文）
 _make_pkg("plugins.chat", str(ROOT / "plugins" / "chat"))
@@ -106,7 +133,7 @@ _mock_handler.append_message = MagicMock()
 _mock_handler.get_config = MagicMock(return_value={"last_message_at": "2026-03-26 11:00:00"})
 _mock_handler.load_admin_prompt = MagicMock(return_value="你是助手")
 _mock_handler.get_proactive_enabled = MagicMock(return_value=True)
-sys.modules["plugins.chat.handler"] = _mock_handler
+_save_and_set("plugins.chat.handler", _mock_handler)
 
 # mock plugins.persona.manager + plugins.group.utils（群聊心跳的会话上下文）
 _make_pkg("plugins.persona", str(ROOT / "plugins" / "persona"))
@@ -117,12 +144,12 @@ _mock_persona.append_message = MagicMock()
 _mock_persona.load_persona_prompt = MagicMock(return_value="群人格 prompt")
 _mock_persona.get_group_config = MagicMock(return_value={"last_message_at": "2026-03-26 11:00:00"})
 _mock_persona.get_group_proactive = MagicMock(return_value=True)
-sys.modules["plugins.persona.manager"] = _mock_persona
+_save_and_set("plugins.persona.manager", _mock_persona)
 
 _make_pkg("plugins.group", str(ROOT / "plugins" / "group"))
 _mock_group_utils = types.ModuleType("plugins.group.utils")
 _mock_group_utils.trim_history = MagicMock(side_effect=lambda msgs, sp: msgs)
-sys.modules["plugins.group.utils"] = _mock_group_utils
+_save_and_set("plugins.group.utils", _mock_group_utils)
 
 # ── 用 importlib 加载 proactive.py（根级引擎）──
 _spec = importlib.util.spec_from_file_location(
@@ -130,20 +157,49 @@ _spec = importlib.util.spec_from_file_location(
     ROOT / "plugins" / "proactive.py",
 )
 proactive = importlib.util.module_from_spec(_spec)
-sys.modules["plugins.proactive"] = proactive
+_save_and_set("plugins.proactive", proactive)
 _spec.loader.exec_module(proactive)
+
+# 记录本文件安装的全部桩，供运行期临时装回；随即还原 sys.modules，
+# 让收集期晚于本文件的其他测试模块在运行期拿到真实模块。
+_STUBBED_MODULES = {
+    "plugins": _plugins_pkg,
+    "plugins.chunker": _mock_chunker,
+    "plugins.llm": _mock_llm,
+    "plugins.local_tools": sys.modules["plugins.local_tools"],
+    "plugins.local_tools.manager": _mock_lt_manager,
+    "plugins.mcp": sys.modules["plugins.mcp"],
+    "plugins.mcp.manager": _mock_mcp_manager,
+    "plugins.skill": sys.modules["plugins.skill"],
+    "plugins.skill.manager": _mock_skill_manager,
+    "plugins.runtime_context": _mock_runtime_context,
+    "plugins.chat": sys.modules["plugins.chat"],
+    "plugins.chat.handler": _mock_handler,
+    "plugins.persona": sys.modules["plugins.persona"],
+    "plugins.persona.manager": _mock_persona,
+    "plugins.group": sys.modules["plugins.group"],
+    "plugins.group.utils": _mock_group_utils,
+    "plugins.proactive": proactive,
+}
+_restore_modules()
 
 
 @pytest.fixture(autouse=True)
 def _cleanup_timer():
-    """每个测试前后确保所有计时器被取消，并重置 mocks。"""
+    """每个测试前后确保所有计时器被取消，并重置 mocks。
+
+    运行期临时装回桩模块（proactive.py 内部大量懒加载依赖它们），
+    测试结束后再次还原，避免泄漏给后续测试文件。
+    """
     _mock_chunker.send_chunked_raw.reset_mock()
     _mock_handler.reset_mock()
     _mock_persona.reset_mock()
     _mock_llm.call_llm.reset_mock()
+    _install_stubs()
     yield
     for key in list(proactive._idle_tasks):
         proactive.cancel_idle_timer(key)
+    _restore_modules()
 
 
 def _mock_call_llm(reply_content: str):
