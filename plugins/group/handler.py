@@ -66,7 +66,8 @@ async def handle_group_chat(event: GroupMessageEvent):
     if event.user_id == event.self_id:
         return
 
-    user_input = extract_text(event)
+    bot = get_bot()
+    user_input = await extract_text(bot, event)
     if not user_input:
         return
 
@@ -98,8 +99,7 @@ async def _handle_group_chat(
     quoted_image_urls: list[str] = []
     reply_id = get_reply_id(event)
     if reply_id:
-        bot = get_bot()
-        quoted_text = await fetch_quoted_text(bot, reply_id)
+        quoted_author, quoted_text = await fetch_quoted_text(bot, reply_id)
         # 仅当模型支持多模态时才抓取引用图片（deepseek 等不支持，省一次 API 调用）
         if SUPPORTS_VISION:
             quoted_image_urls = await fetch_quoted_image_urls(bot, reply_id)
@@ -137,7 +137,7 @@ async def _handle_group_chat(
 
     # 组装用户消息（带发送者标识 + 引用内容）
     if quoted_text:
-        content_text = f"[{sender}] (引用了一条消息: \"{quoted_text}\"): {user_input}"
+        content_text = f"[{sender}] (引用 {quoted_author} 的消息: \"{quoted_text}\"): {user_input}"
     else:
         content_text = f"[{sender}]: {user_input}"
 

@@ -81,9 +81,38 @@ def is_at_bot(event: GroupMessageEvent) -> bool:
     return False
 
 
-def extract_text(event: GroupMessageEvent) -> str:
-    """提取消息中的纯文本（去掉 @部分）"""
-    return event.get_plaintext().strip()
+async def extract_text(bot: Bot, event: GroupMessageEvent) -> str:
+    """提取消息文本，@ 段转成「@昵称(qq号)」可读形式。
+
+    get_plaintext() 会把 @ 段整个丢掉，LLM 就无法知道消息点了谁；
+    这里逐段拼接：@Bot 渲染为 @Bot，@ 他人查一次群成员 API 取昵称
+    （查不到时退化为 @qq号），uid 一并给出供检索工具精确匹配。
+    """
+    parts: list[str] = []
+    for seg in event.message:
+        if seg.type == "text":
+            parts.append(seg.data.get("text", ""))
+        elif seg.type == "at":
+            parts.append(await _render_at(bot, event, seg))
+    return "".join(parts).strip()
+
+
+async def _render_at(bot: Bot, event: GroupMessageEvent, seg) -> str:
+    """渲染单个 @ 段。QQ号来源是消息段（不可伪造昵称对应关系）。"""
+    qq = str(seg.data.get("qq", ""))
+    if not qq:
+        return ""
+    if qq == "all":
+        return "@全体成员"
+    if qq == str(event.self_id):
+        return "@Bot"
+    try:
+        info = await bot.get_group_member_info(group_id=event.group_id, user_id=int(qq))
+        name = info.get("nickname") or ""
+    except Exception as e:
+        logger.warning(f"查询群成员 {qq} 昵称失败: {e}")
+        name = ""
+    return f"@{name}({qq})" if name else f"@{qq}"
 
 
 def get_reply_id(event: GroupMessageEvent) -> int | None:
@@ -96,23 +125,31 @@ def get_reply_id(event: GroupMessageEvent) -> int | None:
     return None
 
 
-async def fetch_quoted_text(bot: Bot, message_id: int) -> str:
-    """通过 API 获取被引用消息的纯文本内容"""
+async def fetch_quoted_text(bot: Bot, message_id: int) -> tuple[str, str]:
+    """通过 API 获取被引用消息的作者昵称与文本，返回 (作者, 内容)。
+
+    群聊里"他说得对吗"这类提问依赖引用消息的作者，只带文字不带人
+    LLM 无法解析"他"指谁。获取失败时返回 ("", "")。
+    """
     try:
         msg_data = await bot.get_msg(message_id=message_id)
+        sender = msg_data.get("sender") or {}
+        author = sender.get("nickname") or "某人"
         raw_msg = msg_data.get("message", "")
         if isinstance(raw_msg, str):
-            return raw_msg.strip()
+            text = raw_msg.strip()
         elif isinstance(raw_msg, list):
             parts = []
             for seg in raw_msg:
                 if isinstance(seg, dict) and seg.get("type") == "text":
                     parts.append(seg.get("data", {}).get("text", ""))
-            return "".join(parts).strip()
-        return str(raw_msg).strip()
+            text = "".join(parts).strip()
+        else:
+            text = str(raw_msg).strip()
+        return (author, text)
     except Exception as e:
         logger.warning(f"获取引用消息失败: {e}")
-        return ""
+        return ("", "")
 
 
 async def fetch_quoted_image_urls(bot: Bot, message_id: int) -> list[str]:

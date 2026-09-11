@@ -37,6 +37,7 @@
 - **私聊仅限 Admin**：非 Admin 用户私聊会收到“请在群里跟我聊天哦~”提示。
 - **群聊**: `data/sessions/groups/<gid>/<persona>.jsonl`，按人格隔离。配置在 `data/sessions/groups/<gid>/config.json`（含 `active_persona` + `last_message_at`）。
 - **消息格式**: `{"role": "user", "content": "你好"}`，纯净的 role/content 格式，不嵌入时间戳。
+- **群聊消息渲染**: 群聊用户消息带 `[昵称]:` 前缀（昵称用 QQ 昵称而非群名片）；@ 段由 `group/utils.py` 的 `extract_text` 渲染为 `@昵称(qq号)`（@Bot 简写为 `@Bot`，查不到昵称退化为 `@qq号`）；引用消息带作者 `(引用 作者 的消息: "...")`。私聊消息不带前缀。
 - **时间上下文**: 动态时间行（当前时间 + 上次对话时间，`last_message_at` 取自 `config.json`）由 `runtime_context.build_time_context()` 生成，**作为独立的 system 消息追加在 messages 数组最末尾**（私聊/群聊主对话）。绝不能拼进 system prompt——LLM 的 prefix cache 按最长公共前缀匹配，秒级时间每轮都变，放 system 里会让整段对话历史每轮缓存全部 miss（2026-09 修复的性能问题）。心跳/塔罗/取名等一次性请求仍拼在 system 里，无影响。这样 LLM 能感知时间但不会在回复中复述时间戳。
 - **config.json**: 每次 `append_message()` 同时更新 `last_message_at` 字段，用于时间上下文和主动发言功能。
 - 私聊由 `plugins/chat/handler.py` 管理 `load_history` / `append_message` / `trim_history`（仅 Admin）。

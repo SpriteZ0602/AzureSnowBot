@@ -7,7 +7,7 @@
 """
 
 from nonebot import get_driver, on_message
-from nonebot.adapters.onebot.v11 import GroupMessageEvent
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent
 from nonebot.log import logger
 
 from .chatlog_db import (
@@ -17,7 +17,7 @@ from .chatlog_db import (
     purge_all_old_entries,
     purge_old_entries,
 )
-from .utils import is_group_event, in_whitelist, is_at_bot
+from .utils import extract_text, is_group_event, in_whitelist, is_at_bot
 from ..persona.manager import get_listen_all
 
 __all__ = ["append_chatlog", "load_chatlog", "purge_old_entries", "RETENTION_DAYS"]
@@ -42,11 +42,12 @@ _chatlog_recorder = on_message(rule=is_group_event, priority=1, block=False)
 
 
 @_chatlog_recorder.handle()
-async def _record_group_message(event: GroupMessageEvent):
+async def _record_group_message(bot: Bot, event: GroupMessageEvent):
     if not in_whitelist(event.group_id):
         return
 
-    text = event.get_plaintext().strip()
+    # @ 感知提取：@ 段转成 @昵称(qq号)，否则记录里丢失"点了谁"的信息
+    text = await extract_text(bot, event)
     if not text:
         return
 
