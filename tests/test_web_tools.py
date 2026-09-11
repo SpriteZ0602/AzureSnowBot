@@ -26,6 +26,7 @@ sys.modules.setdefault("nonebot.adapters.onebot.v11", MagicMock())
 import pytest
 
 from plugins.local_tools.tools import (
+    _bing_search,
     _fetch_page_text,
     web_read_tool,
     web_search_tool,
@@ -35,9 +36,10 @@ from plugins.local_tools.tools import (
 # ──────────────────── httpx 假实现 ────────────────────
 
 class _FakeResp:
-    def __init__(self, text: str = "", status_code: int = 200):
+    def __init__(self, text: str = "", status_code: int = 200, content: bytes | None = None):
         self.text = text
         self.status_code = status_code
+        self.content = content if content is not None else text.encode("utf-8")
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -104,6 +106,23 @@ class TestFetchPageText:
             out = await _fetch_page_text("https://x.com/a")
         assert "页面内容为空" in out
 
+    async def test_jina_403_warning_page_falls_back_to_direct(self):
+        """Jina 返回 HTTP 200 的 403 告警页时，应视为失败并直连抓取"""
+        def _side(url: str, **kw):
+            if "r.jina.ai" in url:
+                return _FakeResp(
+                    "Title: Just a moment...\n\n"
+                    "Warning: Target URL returned error 403: Forbidden"
+                )
+            return _FakeResp("直连抓到的真正文")
+
+        with _patch_httpx(_side):
+            out = await _fetch_page_text("https://x.com/a")
+
+        assert "真正文" in out
+        assert "Target URL returned error" not in out
+        assert "Just a moment" not in out
+
 
 # ──────────────────── web_read ────────────────────
 
@@ -116,6 +135,59 @@ class TestWebRead:
         with _patch_httpx(lambda url, **kw: _FakeResp("页面正文")):
             out = await web_read_tool(url="https://x.com/a")
         assert out == "页面正文"
+
+
+# ──────────────────── _bing_search ────────────────────
+
+BING_HTML = """<html><body><ol>
+<li class="b_algo"><link rel="stylesheet" href="/rp/x.css"/><h2 class=""><a target="_blank" href="https://a.com/1" h="ID=SERP,1.1">First <strong>Result</strong></a></h2>
+<div class="b_caption"><p class="b_lineclamp2">First description &amp; more</p></div></li>
+<li class="b_algo"><h2 class=""><a href="https://example.org/2">Second Result</a></h2>
+<div class="b_caption"><p class="b_lineclamp2">2025年8月18日&ensp;Second description</p></div></li>
+</ol></body></html>"""
+
+
+class TestBingSearch:
+    """Bing 主引擎：解析 cn.bing.com HTML 结果（RSS 端点已废弃，返回随机垃圾），
+    固定中文市场，绕过代理环境变量"""
+
+    async def test_uses_cn_bing_with_zh_market_and_no_proxy(self):
+        captured = {}
+
+        class _RecordingClient:
+            def __init__(self, **init_kwargs):
+                captured["init"] = init_kwargs
+
+            async def __aenter__(self):
+                async def _get(url, **kw):
+                    captured["url"] = url
+                    captured["params"] = kw.get("params", {})
+                    return _FakeResp(BING_HTML)
+
+                self.get = _get
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+        with patch("httpx.AsyncClient", _RecordingClient):
+            results = await _bing_search("facebook", 5)
+
+        assert len(results) == 2
+        assert results[0]["title"] == "First Result"  # <strong> 被剥离
+        assert results[0]["url"] == "https://a.com/1"
+        assert results[0]["desc"] == "First description & more"  # 实体被反转义
+        assert results[1]["desc"] == "2025年8月18日 Second description"
+        assert "cn.bing.com" in captured["url"]
+        assert captured["params"]["mkt"] == "zh-CN"
+        assert captured["params"]["q"] == "facebook"
+        assert captured["init"].get("trust_env") is False
+
+    async def test_junk_page_returns_empty(self):
+        """页面没有 b_algo 块（验证页/异常页）时返回空列表，交给上层降级 DDG"""
+        with _patch_httpx(lambda url, **kw: _FakeResp("<html>安全验证</html>")):
+            results = await _bing_search("任意", 5)
+        assert results == []
 
 
 # ──────────────────── web_search ────────────────────

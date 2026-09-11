@@ -841,12 +841,22 @@ async def get_group_chat_log(
 # 网络搜索与网页读取工具
 # ──────────────────────────────────────────────────────
 
+# 通用浏览器 UA（Bing HTML 解析 / 直连抓取共用；裸 "Mozilla/5.0" 容易吃反爬）
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
+
 def _strip_html(html: str) -> str:
-    """粗暴提取 HTML 纯文本（直连抓取 fallback 用）"""
+    """粗暴提取 HTML 纯文本（搜索摘要 / 直连抓取 fallback 用）"""
     import re as _re
+    from html import unescape as _unescape
+
     text = _re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", html)
     text = _re.sub(r"(?s)<[^>]+>", " ", text)
     text = _re.sub(r"&nbsp;?", " ", text)
+    text = _unescape(text)
     text = _re.sub(r"\s+", " ", text)
     return text.strip()
 
@@ -855,6 +865,16 @@ def _truncate(text: str, max_chars: int, url: str) -> str:
     if len(text) > max_chars:
         return text[:max_chars] + f"\n...(内容被截断，共 {len(text)} 字符)"
     return text
+
+
+# Jina Reader 对反爬站会返回 HTTP 200 的告警页（目标站 403 / Cloudflare
+# 挑战页），正文实际不可用。命中这些标记就当 Jina 失败，走直连 fallback。
+_JINA_FAILURE_MARKERS = ("target url returned error", "just a moment")
+
+
+def _jina_body_ok(text: str) -> bool:
+    lowered = text.lower()
+    return not any(marker in lowered for marker in _JINA_FAILURE_MARKERS)
 
 
 async def _fetch_page_text(url: str, max_chars: int = 6000) -> str:
@@ -874,7 +894,8 @@ async def _fetch_page_text(url: str, max_chars: int = 6000) -> str:
             )
             resp.raise_for_status()
             text = resp.text.strip()
-            if text:
+            # HTTP 200 不代表拿到正文——反爬站会返回告警页
+            if text and _jina_body_ok(text):
                 return _truncate(text, max_chars, url)
     except Exception:
         pass  # Jina 不可达/失败 → 直连 fallback
@@ -884,7 +905,7 @@ async def _fetch_page_text(url: str, max_chars: int = 6000) -> str:
         async with _httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.get(
                 url,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                headers={"User-Agent": _BROWSER_UA},
             )
             resp.raise_for_status()
             text = _strip_html(resp.text)
@@ -919,39 +940,39 @@ async def web_read_tool(url: str = "", **kwargs) -> str:
     return await _fetch_page_text(url, max_chars=6000)
 
 
-def _rss_text(el, name: str) -> str:
-    """从 RSS 元素取子元素文本（兼容带/不带命名空间）"""
-    for child in el:
-        if child.tag.split("}")[-1] == name:
-            return (child.text or "").strip()
-    return ""
-
-
 async def _bing_search(query: str, num_results: int) -> list[dict]:
-    """Bing RSS 搜索（国内可达，免 API key）"""
+    """Bing 网页版搜索（cn.bing.com 国内直连可达，免 API key）。
+
+    不要改回 format=rss：该端点已废弃，对多数查询返回随机无关结果
+    （实测「今天上海天气」返回州法院网站、「stackoverflow 怎么用」返回
+    西班牙聊天站），只有 python 这类高频词恰好正常。这里解析 HTML 版
+    的 li.b_algo 结果块。显式 cn.bing.com + mkt=zh-CN 固定中文市场
+    （不带 mkt 时会按出口 IP 漂移到 ja-jp 等垃圾本地化）；
+    trust_env=False 不读代理环境变量，国内服务器直连、结果稳定。
+    """
+    import re as _re2
+
     import httpx as _h
 
-    async with _h.AsyncClient(timeout=15, follow_redirects=True) as client:
+    async with _h.AsyncClient(timeout=15, follow_redirects=True, trust_env=False) as client:
         resp = await client.get(
-            "https://www.bing.com/search",
-            params={"format": "rss", "q": query},
-            headers={"User-Agent": "Mozilla/5.0"},
+            "https://cn.bing.com/search",
+            params={"q": query, "mkt": "zh-CN", "setlang": "zh-hans"},
+            headers={"User-Agent": _BROWSER_UA},
         )
         resp.raise_for_status()
 
-    import xml.etree.ElementTree as _ET
-    root = _ET.fromstring(resp.content)
     results: list[dict] = []
-    for el in root.iter():
-        if el.tag.split("}")[-1] != "item":
+    for blk in _re2.findall(r'<li class="b_algo".*?</li>', resp.text, _re2.S):
+        m = _re2.search(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', blk, _re2.S)
+        if not m:
             continue
-        title = _rss_text(el, "title")
-        url = _rss_text(el, "link")
-        desc = _rss_text(el, "description")
-        if not title and not url:
+        title = _strip_html(m.group(2))
+        if not title:
             continue
-        desc = _strip_html(desc) if desc else ""
-        results.append({"title": title, "url": url, "desc": desc})
+        cap = _re2.search(r'<div class="b_caption"[^>]*>\s*<p[^>]*>(.*?)</p>', blk, _re2.S)
+        desc = _strip_html(cap.group(1)) if cap else ""
+        results.append({"title": title, "url": m.group(1), "desc": desc})
         if len(results) >= num_results:
             break
     return results
