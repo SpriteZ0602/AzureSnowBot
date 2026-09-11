@@ -17,7 +17,6 @@ from ..persona.manager import (
     get_active_persona, _session_path as persona_session_path,
     get_listen_all, set_listen_all,
     get_group_proactive, set_group_proactive,
-    get_auto_trigger, set_auto_trigger,
     load_persona_prompt, get_group_config, group_memory_path,
 )
 from ..runtime_context import build_runtime_context
@@ -177,52 +176,6 @@ async def handle_group_proactive(event: GroupMessageEvent):
     await group_proactive_cmd.finish(
         MessageSegment.reply(event.message_id) + f"群 {target_gid} 的主动对话{state}"
     )
-
-
-# ──────────────────── /chatter 复读与插话 ────────────────────
-auto_trigger_cmd = on_message(
-    rule=Rule(is_group_event) & startswith("/chatter") & Rule(is_at_bot),
-    priority=8, block=True,
-)
-
-
-@auto_trigger_cmd.handle()
-async def handle_auto_trigger(event: GroupMessageEvent):
-    if not in_whitelist(event.group_id):
-        return
-
-    text = event.get_plaintext().strip()
-    if not text.startswith("/chatter"):
-        return
-    if not is_at_bot(event):
-        return
-
-    from nonebot import get_driver
-    admin_number = str(getattr(get_driver().config, "admin_number", ""))
-    if not admin_number or str(event.user_id) != admin_number:
-        await auto_trigger_cmd.finish(
-            MessageSegment.reply(event.message_id) + "仅 Bot 管理员可以开关复读和插话。"
-        )
-
-    group_id = str(event.group_id)
-    arg = text[len("/chatter"):].strip().lower()
-    if arg in ("on", "开"):
-        enable = True
-    elif arg in ("off", "关"):
-        enable = False
-    elif arg == "":
-        enable = not get_auto_trigger(group_id)
-    else:
-        await auto_trigger_cmd.finish(
-            MessageSegment.reply(event.message_id) + "用法: /chatter [on|off]"
-        )
-
-    set_auto_trigger(group_id, enable)
-    if enable:
-        msg = "已开启：本群会按概率复读和插话。"
-    else:
-        msg = "已关闭：本群不再主动复读或插话。"
-    await auto_trigger_cmd.finish(MessageSegment.reply(event.message_id) + msg)
 
 
 # ──────────────────── /取名 ────────────────────
@@ -403,7 +356,6 @@ HELP_TEXT = """/persona — 列出所有人格
 /塔罗 [牌数1-5] [问题] — 塔罗占卜（抽牌并解读）
 /reset — 清除当前对话历史
 /listen [on|off] — 切换全量上下文模式：开启后 @Bot 回复加载全量群聊消息（仅管理员）
-/chatter [on|off] — 开关本群复读和热闹插话（仅管理员，默认关）
 /主动对话 [群号] enable|disable — 切换群的主动对话（仅管理员）
 /白名单 list|add <群号>|delete <群号> — 管理群白名单（仅管理员）
 /help — 显示本帮助"""

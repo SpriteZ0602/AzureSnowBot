@@ -339,6 +339,57 @@ async def handle_listen_private(event: PrivateMessageEvent):
     await listen_cmd_private.finish(f"群 {target_gid} 的{state}")
 
 
+# ──────────────────── /chatter 群复读与插话开关（私聊） ────────────────────
+chatter_cmd_private = on_message(
+    rule=Rule(is_private_event) & startswith("/chatter"),
+    priority=10, block=True,
+)
+
+
+@chatter_cmd_private.handle()
+async def handle_chatter_private(event: PrivateMessageEvent):
+    user_id = str(event.user_id)
+    if not ADMIN_NUMBER or user_id != str(ADMIN_NUMBER):
+        return  # 非管理员直接忽略
+
+    text = event.get_plaintext().strip()
+    args = text[len("/chatter"):].strip().split()
+
+    from ..persona.manager import get_auto_trigger, set_auto_trigger
+
+    # 不带参数：列出白名单各群的复读插话状态
+    if not args:
+        from ..group.utils import list_whitelist
+        groups = list_whitelist()
+        if not groups:
+            await chatter_cmd_private.finish("白名单为空。")
+        lines = [
+            f"- {g}　复读插话: {'开' if get_auto_trigger(g) else '关'}"
+            for g in groups
+        ]
+        await chatter_cmd_private.finish("各群复读与插话状态:\n" + "\n".join(lines))
+
+    if not args[0].isdigit():
+        await chatter_cmd_private.finish(
+            "用法: /chatter <群号> [on|off]，或不带参数查看各群状态"
+        )
+
+    target_gid = args[0]
+    arg = args[1].lower() if len(args) > 1 else None
+    if arg in ("on", "开"):
+        enable = True
+    elif arg in ("off", "关"):
+        enable = False
+    elif arg is None:
+        enable = not get_auto_trigger(target_gid)
+    else:
+        await chatter_cmd_private.finish("用法: /chatter <群号> [on|off]")
+
+    set_auto_trigger(target_gid, enable)
+    state = "已开启：本群会按概率复读和插话。" if enable else "已关闭：本群不再主动复读或插话。"
+    await chatter_cmd_private.finish(f"群 {target_gid} 的复读与插话{state}")
+
+
 # ──────────────────── /塔罗 塔罗占卜（私聊） ────────────────────
 tarot_cmd = on_message(rule=Rule(is_private_event) & startswith("/塔罗"), priority=10, block=True)
 
@@ -408,6 +459,7 @@ PRIVATE_HELP = """/reset — 清除对话历史
 /主动对话 enable|disable — 切换私聊主动对话（Bot 空闲时主动发消息）
 /主动对话 <群号> enable|disable — 切换指定群的主动对话
 /listen <群号> [on|off] — 切换指定群的全量上下文模式
+/chatter <群号> [on|off] — 开关指定群的复读与插话（不带群号查看各群状态）
 /白名单 list|add <群号>|delete <群号> — 管理群白名单
 /help — 显示本帮助"""
 
