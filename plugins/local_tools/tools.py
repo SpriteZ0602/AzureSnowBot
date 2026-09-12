@@ -838,6 +838,135 @@ async def get_group_chat_log(
 
 
 # ──────────────────────────────────────────────────────
+# 群管理工具（昵称→QQ号解析交给模型，硬护栏写在实现里）
+# ──────────────────────────────────────────────────────
+
+# 单次禁言上限（分钟）：高危操作，模型侧的"自觉"不可靠，上限写死在代码里
+_MUTE_MAX_MINUTES = 10
+
+_ROLE_CN = {"owner": "群主", "admin": "管理员", "member": "群员"}
+
+
+def _check_group_only(context: dict | None) -> tuple[str, str | None]:
+    """校验群聊场景，返回 (group_id, error_msg)"""
+    if not context or context.get("_chat_type") != "group":
+        return "", "[错误] 此工具仅限群聊使用"
+    group_id = str(context.get("_target_id", ""))
+    if not group_id.isdigit():
+        return "", "[错误] 无法获取群号"
+    return group_id, None
+
+
+def _member_display(m: dict) -> str:
+    """成员展示名：昵称为主，群名片不同时附在括号里"""
+    nick = m.get("nickname") or ""
+    card = m.get("card") or ""
+    if card and card != nick:
+        return f"{nick}({card})"
+    return nick or str(m.get("user_id", ""))
+
+
+@register_tool(
+    name="get_group_members",
+    description=(
+        "获取当前群的成员列表（QQ号 昵称(群名片) 角色）。"
+        "用途：把用户提到的外号/昵称对应到QQ号、确认某人是否管理员。"
+        "禁言等操作前必须先用它确认目标的QQ号。"
+    ),
+    parameters={"type": "object", "properties": {}},
+)
+async def get_group_members(_context: dict | None = None, **kwargs) -> str:
+    group_id, err = _check_group_only(_context)
+    if err:
+        return err
+
+    from nonebot import get_bot
+
+    try:
+        bot = get_bot()
+        members = await bot.get_group_member_list(group_id=int(group_id))
+    except Exception as e:
+        return f"[错误] 获取群成员列表失败: {e}"
+
+    lines = [f"{m.get('user_id', '?')} {_member_display(m)} {_ROLE_CN.get(m.get('role', 'member'), '群员')}"
+             for m in members]
+    if not lines:
+        return "[错误] 群成员列表为空"
+    if len(lines) > 200:
+        lines = lines[:200] + [f"...（共 {len(members)} 人，仅显示前 200）"]
+    return f"群 {group_id} 成员（QQ号 昵称 角色）:\n" + "\n".join(lines)
+
+
+@register_tool(
+    name="group_mute",
+    description=(
+        "禁言当前群的指定成员。硬性规则：仅群管理员可用（工具校验调用者身份）；"
+        "user_id 必须先用 get_group_members 确认；时长上限 10 分钟；"
+        "不能禁言群主、管理员和 Bot 自己。只在用户明确要求禁言某人时使用，"
+        "目标身份不确定时先向用户确认。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "user_id": {
+                "type": "string",
+                "description": "目标QQ号（数字，先用 get_group_members 确认）",
+            },
+            "duration_minutes": {
+                "type": "integer",
+                "description": "禁言时长（分钟），1-10，默认 10",
+            },
+        },
+        "required": ["user_id"],
+    },
+)
+async def group_mute(
+    user_id: str = "",
+    duration_minutes: int = 10,
+    _context: dict | None = None,
+    **kwargs,
+) -> str:
+    group_id, err = _check_group_only(_context)
+    if err:
+        return err
+
+    from nonebot import get_bot
+
+    user_id = str(user_id).strip()
+    if not user_id.isdigit():
+        return "[错误] user_id 必须是QQ号（数字），请先用 get_group_members 查询"
+
+    caller_id = str((_context or {}).get("_user_id", ""))
+    if not caller_id.isdigit():
+        return "[错误] 无法确认调用者身份"
+
+    try:
+        bot = get_bot()
+        # 硬护栏：发起者必须是本群管理员/群主（模型侧判断不可靠，这里强制校验）
+        caller = await bot.get_group_member_info(group_id=int(group_id), user_id=int(caller_id))
+        if caller.get("role") not in ("admin", "owner"):
+            return "[错误] 只有群管理员才能禁言成员"
+        # 硬护栏：目标不能是 Bot 自己、群主、管理员
+        if user_id == str(bot.self_id):
+            return "[错误] 不能禁言 Bot 自己"
+        target = await bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
+        if target.get("role") in ("admin", "owner"):
+            return f"[错误] 不能禁言{_ROLE_CN.get(target.get('role'), '管理员')}"
+        # 时长封顶
+        try:
+            requested = int(duration_minutes)
+        except (TypeError, ValueError):
+            requested = 10
+        minutes = max(1, min(requested, _MUTE_MAX_MINUTES))
+        await bot.set_group_ban(group_id=int(group_id), user_id=int(user_id), duration=minutes * 60)
+    except Exception as e:
+        return f"[错误] 禁言失败: {e}（确认 Bot 是否有管理员权限、目标是否在群里）"
+
+    note = f"（请求超上限，已按 {_MUTE_MAX_MINUTES} 分钟执行）" if requested > _MUTE_MAX_MINUTES else ""
+    return f"已将 {_member_display(target)}({user_id}) 禁言 {minutes} 分钟{note}"
+
+
+# ──────────────────────────────────────────────────────
 # 网络搜索与网页读取工具
 # ──────────────────────────────────────────────────────
 
