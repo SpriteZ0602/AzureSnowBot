@@ -402,6 +402,23 @@ class SessionStore:
 - **`group_mute`**：禁言群成员。硬护栏写死在工具实现里（模型侧判断不可靠）：调用者须本群管理员（`_user_id` 查 role）、目标非群主/管理员/Bot 自己、单次时长封顶 `_MUTE_MAX_MINUTES = 10` 分钟；`set_group_ban` 失败 try/except 返回 `[错误]` 文本
 - 设计取舍：昵称→QQ号解析由模型在 Loop 里完成（成员列表作为独立工具），不封进 mute 工具内部；超 200 人列表截断展示
 
+### 10. 舞萌DX查分（已完成）
+
+- **模块**: `plugins/maimai.py`（仅依赖 httpx + logger，无 nonebot API 调用）
+- **查分**: 水鱼 `POST /query/player`（免鉴权，公开 b50）；绑定了 Token 的 QQ 走本人通道
+  `GET /player/records?is_new=true|false`（不受隐私遮蔽影响）
+- **b50 计算**: 新桶（is_new=true）ra top15 + 旧桶 top35，`rating = additional_rating + sum(ra)`。
+  ⚡用真实账号校准精确对齐官方 rating；注意成绩记录本体**不含** is_new/version 字段，
+  必须靠服务端分桶（lxns 曲库缺新歌、映射会大量失败，不可用）
+- **别名**: 柚子别名库 v2（`yuzuchan.moe/api/v2`，必须带浏览器 UA 否则 CDN 断连），
+  全量表落盘 `data/maimai/alias_cache.json`（7 天 TTL）+ 本地子串过滤；lxns 别名表缺新歌仅作备份。
+  公开别名库没有的私货外号靠群记忆（外号→正式曲名写入群 MEMORY.md）
+- **Token**: `/bind <token>`（群聊+私聊均可）→ `data/maimai/tokens.json`（gitignored）。
+  Token 等同水鱼成绩数据读写凭证：代码只调读端点、不进日志/返回值，chatlog 记录器对
+  /bind、/unbind 消息整条跳过（防 Token 落库进 LLM 上下文）
+- **工具**: `maimai_player_query(qq)`、`maimai_song_search(song_name)`（Token 解析在模块内部，模型不可见）
+- **缓存**: 查分结果进程内 5 分钟 TTL（防群友连刷触发水鱼限流）
+
 ## 代码风格约定
 
 - 使用 `from nonebot.log import logger` 做日志，不用 `print`

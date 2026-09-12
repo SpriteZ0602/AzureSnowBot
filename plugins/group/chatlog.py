@@ -51,6 +51,10 @@ async def _record_group_message(bot: Bot, event: GroupMessageEvent):
     if not text:
         return
 
+    # /bind 消息携带水鱼 Token（成绩数据凭证），不落任何记录（全量记录与 listen_all 上下文都跳过）
+    if text.startswith("/bind") or text.startswith("/unbind"):
+        return
+
     group_id = str(event.group_id)
     user_id = str(event.user_id)
     nickname = event.sender.nickname or user_id

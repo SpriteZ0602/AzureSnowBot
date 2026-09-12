@@ -120,6 +120,50 @@ async def handle_whitelist(event: GroupMessageEvent):
     await whitelist_cmd.finish(MessageSegment.reply(event.message_id) + reply)
 
 
+# ──────────────────── /bind 水鱼查分 Token 绑定 ────────────────────
+
+bind_cmd = on_message(rule=Rule(is_group_event) & startswith("/bind"), priority=8, block=True)
+
+
+@bind_cmd.handle()
+async def handle_bind(event: GroupMessageEvent):
+    text = event.get_plaintext().strip()
+    if not text.startswith("/bind"):
+        return
+
+    from ..maimai import bind_token, verify_token
+
+    token = text[len("/bind"):].strip()
+    if not token:
+        await bind_cmd.finish(
+            "用法: /bind <水鱼导入Token>\n"
+            "Token 在 maimai.diving-fish.com 登录后「个人资料」页获取。"
+            "绑定后查询你自己的成绩可看完整 b50（不受隐私遮蔽影响）。"
+        )
+
+    qq = str(event.user_id)
+    info = await verify_token(token)
+    if info is None:
+        await bind_cmd.finish("[错误] Token 无效或已过期，请去水鱼个人资料页重新获取。")
+
+    bind_token(qq, token)
+    await bind_cmd.finish(
+        f"已绑定到水鱼账号「{info.get('username')}」（rating={info.get('rating')}）。\n"
+        "⚠️ Token 等同成绩数据凭证，建议立刻长按撤回你刚才那条 /bind 消息。"
+    )
+
+
+unbind_cmd = on_fullmatch("/unbind", rule=Rule(is_group_event), priority=8, block=True)
+
+
+@unbind_cmd.handle()
+async def handle_unbind(event: GroupMessageEvent):
+    from ..maimai import unbind_token
+
+    ok = unbind_token(str(event.user_id))
+    await unbind_cmd.finish("已解除绑定。" if ok else "你还没有绑定过 Token。")
+
+
 # ──────────────────── /主动对话 群聊主动发言开关 ────────────────────
 group_proactive_cmd = on_message(rule=Rule(is_group_event) & startswith("/主动对话") & Rule(is_at_bot), priority=8, block=True)
 
@@ -359,6 +403,8 @@ HELP_TEXT = """/persona — 列出所有人格
 /listen [on|off] — 切换全量上下文模式：开启后 @Bot 回复加载全量群聊消息（仅管理员）
 /主动对话 [群号] enable|disable — 切换群的主动对话（仅管理员）
 /白名单 list|add <群号>|delete <群号> — 管理群白名单（仅管理员）
+/bind <token> — 绑定水鱼查分 Token（查询自己成绩不被隐私遮蔽）
+/unbind — 解除水鱼 Token 绑定
 /help — 显示本帮助"""
 
 help_cmd = on_fullmatch("/help", rule=is_group_event, priority=5, block=True)

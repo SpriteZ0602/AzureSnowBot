@@ -968,6 +968,55 @@ async def group_mute(
 
 
 # ──────────────────────────────────────────────────────
+# 舞萌 DX 查分（水鱼 API + 柚子别名库；token 解析在模块内部，模型不可见）
+# ──────────────────────────────────────────────────────
+
+@register_tool(
+    name="maimai_player_query",
+    description=(
+        "查询舞萌DX（maimai）玩家的 DX Rating 和 b50（best 50）成绩。"
+        "传入玩家QQ号（可先用 get_group_members 把昵称解析成QQ号）。"
+        "对方需在水鱼查分器（maimai.diving-fish.com）同步过成绩；"
+        "对方开启隐私保护时可能看不到明细。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "qq": {"type": "string", "description": "玩家QQ号（数字）"},
+        },
+        "required": ["qq"],
+    },
+)
+async def maimai_player_query(qq: str = "", **kwargs) -> str:
+    from ..maimai import query_player_b50
+
+    return await query_player_b50(qq)
+
+
+@register_tool(
+    name="maimai_song_search",
+    description=(
+        "按别名/俗称/曲名关键词模糊搜索舞萌DX曲目，返回曲名、song_id 和全部别名。"
+        "用户用外号问歌（如'鸟屎是什么歌'）时使用；也可用于把外号转换成正式曲名。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "song_name": {"type": "string", "description": "别名、俗称或曲名关键词，如: 鸟屎"},
+        },
+        "required": ["song_name"],
+    },
+)
+async def maimai_song_search(song_name: str = "", **kwargs) -> str:
+    from ..maimai import format_songs, search_songs
+
+    if not song_name.strip():
+        return "[错误] song_name 不能为空"
+    hits = await search_songs(song_name)
+    return format_songs(hits)
+
+
+# ──────────────────────────────────────────────────────
 # 网络搜索与网页读取工具
 # ──────────────────────────────────────────────────────
 
