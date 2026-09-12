@@ -99,6 +99,7 @@ async def _handle_group_chat(
     quoted_image_urls: list[str] = []
     reply_id = get_reply_id(event)
     if reply_id:
+        bot = get_bot()
         quoted_author, quoted_text = await fetch_quoted_text(bot, reply_id)
         # 仅当模型支持多模态时才抓取引用图片（deepseek 等不支持，省一次 API 调用）
         if SUPPORTS_VISION:
