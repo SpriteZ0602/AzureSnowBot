@@ -900,10 +900,11 @@ async def get_group_members(_context: dict | None = None, **kwargs) -> str:
 @register_tool(
     name="group_mute",
     description=(
-        "禁言当前群的指定成员。硬性规则：仅群管理员可用（工具校验调用者身份）；"
-        "user_id 必须先用 get_group_members 确认；时长上限 10 分钟；"
-        "不能禁言群主、管理员和 Bot 自己。只在用户明确要求禁言某人时使用，"
-        "目标身份不确定时先向用户确认。"
+        "禁言当前群的指定成员。权限由工具自动校验（调用者须为本群管理员），"
+        "无需请求用户确认：目标明确时直接调用执行。"
+        "user_id 用 get_group_members 查询；时长上限 10 分钟；"
+        "不能禁言群主、管理员和 Bot 自己。"
+        "仅当目标无法唯一确定（多个同名/相似昵称）时才向用户确认。"
     ),
     parameters={
         "type": "object",
