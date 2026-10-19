@@ -61,6 +61,8 @@ def _make_job(
     created_at: str | None = None,
     recurring: str = "",
     daily_time: str = "",
+    mode: str = "reminder",
+    group_id: str = "",
 ) -> ReminderJob:
     now = datetime.now()
     return ReminderJob(
@@ -74,6 +76,8 @@ def _make_job(
         created_at=created_at or now.isoformat(),
         recurring=recurring,
         daily_time=daily_time,
+        mode=mode,
+        group_id=group_id,
     )
 
 
@@ -242,6 +246,141 @@ class TestDeduplicateDaily:
         result = _find_duplicate_daily("group", "123", "签到", "09:00")
         assert result is None
 
+    def test_reminder_and_task_same_time_not_dup(self):
+        """同一时刻的每日提醒和每日任务互不冲突"""
+        job = _make_job(
+            message="签到", recurring="daily", daily_time="09:00",
+            mode="reminder", target_id="123",
+        )
+        _jobs[job.id] = job
+        result = _find_duplicate_daily(
+            "group", "123", "生成摘要", "09:00", mode="task",
+        )
+        assert result is None
+
+    def test_task_dedup_by_mode(self):
+        """同模式 + 同时刻 → 视为重复（不论任务内容）"""
+        job = _make_job(
+            message="生成摘要", recurring="daily", daily_time="19:00",
+            mode="task", target_id="123",
+        )
+        _jobs[job.id] = job
+        result = _find_duplicate_daily(
+            "group", "123", "汇总讨论", "19:00", mode="task",
+        )
+        assert result is not None
+        assert result.id == job.id
+
+
+# ──────────────────── add_daily_task ────────────────────
+
+class TestAddDailyTask:
+    """测试每日定时任务的注册"""
+
+    def setup_method(self):
+        _clear_jobs()
+
+    def teardown_method(self):
+        _clear_jobs()
+
+    @pytest.mark.asyncio
+    async def test_registers_task_mode(self):
+        from plugins.reminder.scheduler import add_daily_task
+
+        async def _noop(job):
+            return None
+
+        with patch("plugins.reminder.scheduler._fire_daily", _noop), \
+             patch("plugins.reminder.scheduler._save"):
+            job_id, _ = add_daily_task(
+                chat_type="group",
+                target_id="123456",
+                user_id="111",
+                creator_name="测试用户",
+                task="生成当天群聊摘要",
+                daily_time="19:00",
+            )
+
+        job = _jobs[job_id]
+        assert job.mode == "task"
+        assert job.recurring == "daily"
+        assert job.daily_time == "19:00"
+        # 群聊任务自动记录群号，供执行时检索聊天记录
+        assert job.group_id == "123456"
+
+    @pytest.mark.asyncio
+    async def test_private_task_keeps_group_id(self):
+        from plugins.reminder.scheduler import add_daily_task
+
+        async def _noop(job):
+            return None
+
+        with patch("plugins.reminder.scheduler._fire_daily", _noop), \
+             patch("plugins.reminder.scheduler._save"):
+            job_id, _ = add_daily_task(
+                chat_type="private",
+                target_id="111",
+                user_id="111",
+                creator_name="Admin",
+                task="生成当天群聊摘要",
+                daily_time="19:00",
+                group_id="654321",
+            )
+
+        job = _jobs[job_id]
+        assert job.mode == "task"
+        assert job.group_id == "654321"
+
+    @pytest.mark.asyncio
+    async def test_task_replaces_reminder_same_time(self):
+        """同一时刻已有每日提醒时，新任务应替换旧提醒（避免双触发）"""
+        from plugins.reminder.scheduler import add_daily_reminder, add_daily_task
+
+        async def _noop(job):
+            return None
+
+        with patch("plugins.reminder.scheduler._fire_daily", _noop), \
+             patch("plugins.reminder.scheduler._save"):
+            reminder_id, _ = add_daily_reminder(
+                chat_type="private", target_id="111", user_id="111",
+                creator_name="Admin", message="生成当天群聊摘要",
+                daily_time="19:00",
+            )
+            task_id, _ = add_daily_task(
+                chat_type="private", target_id="111", user_id="111",
+                creator_name="Admin", task="生成当天群聊摘要",
+                daily_time="19:00", group_id="654321",
+            )
+
+        assert reminder_id not in _jobs
+        assert task_id in _jobs
+        assert _jobs[task_id].mode == "task"
+
+    @pytest.mark.asyncio
+    async def test_reminder_replaces_task_same_time(self):
+        """同一时刻已有每日任务时，新提醒应替换旧任务"""
+        from plugins.reminder.scheduler import add_daily_reminder, add_daily_task
+
+        async def _noop(job):
+            return None
+
+        with patch("plugins.reminder.scheduler._fire_daily", _noop), \
+             patch("plugins.reminder.scheduler._save"):
+            task_id, _ = add_daily_task(
+                chat_type="group", target_id="123456", user_id="111",
+                creator_name="测试用户", task="生成当天群聊摘要",
+                daily_time="19:00",
+            )
+            reminder_id, _ = add_daily_reminder(
+                chat_type="group", target_id="123456", user_id="111",
+                creator_name="测试用户", message="开会",
+                daily_time="19:00",
+            )
+
+        assert task_id not in _jobs
+        assert reminder_id in _jobs
+        assert _jobs[reminder_id].mode == "reminder"
+
 
 # ──────────────────── cancel_reminder ────────────────────
 
@@ -325,11 +464,21 @@ class TestReminderJob:
         job = _make_job()
         assert job.recurring == ""
         assert job.daily_time == ""
+        assert job.mode == "reminder"
+        assert job.group_id == ""
 
     def test_daily_fields(self):
         job = _make_job(recurring="daily", daily_time="09:30")
         assert job.recurring == "daily"
         assert job.daily_time == "09:30"
+
+    def test_task_fields(self):
+        job = _make_job(
+            recurring="daily", daily_time="19:00",
+            mode="task", group_id="123456",
+        )
+        assert job.mode == "task"
+        assert job.group_id == "123456"
 
     def test_asdict(self):
         from dataclasses import asdict

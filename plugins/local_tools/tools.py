@@ -621,8 +621,10 @@ async def set_reminder(
 @register_tool(
     name="set_daily_reminder",
     description=(
-        "当用户要求每天定时提醒时，你必须调用此工具，不能只口头答应。"
+        "当用户要求每天定时提醒**用户本人**去做某事时，你必须调用此工具，不能只口头答应。"
         "你没有定时循环能力，只有调用此工具才能实现每日提醒。"
+        "如果用户要求你每天自己完成一件事（如生成摘要、整理记录、播报），"
+        "请改用 set_daily_task，不要用本工具。"
         "message不要填写生成好的提醒话术，只填事项本身。"
         "只处理用户最新的这条消息中的提醒请求，之前的提醒默认已经设置过。"
     ),
@@ -681,6 +683,81 @@ async def set_daily_reminder_tool(
 
 
 @register_tool(
+    name="set_daily_task",
+    description=(
+        "设置每天定时自动执行的任务：到点后由你自己完成并把结果发出来，不是提醒用户去做。"
+        "适用：生成当天群聊摘要、整理讨论、每日播报、定时查询等需要你动手完成的事。"
+        "如果用户只是要你提醒他本人去做某事（如“提醒我签到”），请用 set_daily_reminder。"
+        "私聊中如任务与某个群相关但用户没给群号，先问清楚群号再设置，不要猜。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "要你定时执行的任务描述，例如：生成当天群聊摘要、汇总今天的讨论。写清楚做什么，不要写成提醒话术。",
+            },
+            "time": {
+                "type": "string",
+                "description": "每天执行时刻，HH:MM 格式（24小时制）。例如 09:00、19:00",
+            },
+            "group_id": {
+                "type": "string",
+                "description": "任务涉及的群号。群聊中可省略（默认当前群）；私聊中涉及群聊任务时填写。",
+            },
+        },
+        "required": ["task", "time"],
+    },
+)
+async def set_daily_task(
+    task: str = "",
+    time: str = "",
+    group_id: str = "",
+    _context: dict | None = None,
+    **kwargs,
+) -> str:
+    from ..reminder.scheduler import add_daily_task
+    import re
+
+    if not _context:
+        return "[错误] 缺少上下文信息，无法设置任务"
+    if not task:
+        return "[错误] 任务内容不能为空"
+    if not re.match(r"^\d{1,2}:\d{2}$", time):
+        return "[错误] 时间格式不正确，请使用 HH:MM 格式（如 09:00、19:00）"
+
+    parts = time.split(":")
+    h, m = int(parts[0]), int(parts[1])
+    if h < 0 or h > 23 or m < 0 or m > 59:
+        return "[错误] 时间超出范围（小时 0-23，分钟 0-59）"
+    time_normalized = f"{h:02d}:{m:02d}"
+
+    chat_type = _context.get("_chat_type", "group")
+    target_id = _context.get("_target_id", "")
+    user_id = _context.get("_user_id", "")
+    sender_name = _context.get("_sender_name", "用户")
+
+    group_id = (group_id or "").strip()
+    if group_id and not group_id.isdigit():
+        return "[错误] 群号必须是纯数字"
+    if chat_type == "group":
+        if group_id and group_id != str(target_id):
+            return "[错误] 群聊中只能为当前群设置任务（group_id 可省略）"
+        group_id = str(target_id)
+
+    job_id, fire_str = add_daily_task(
+        chat_type=chat_type,
+        target_id=target_id,
+        user_id=user_id,
+        creator_name=sender_name,
+        task=task,
+        daily_time=time_normalized,
+        group_id=group_id,
+    )
+    return f"已设置每日定时任务 [{job_id}]：每天 {time_normalized} 自动执行「{task}」（下次执行: {fire_str}）"
+
+
+@register_tool(
     name="cancel_reminder",
     description="取消一个已设置的定时提醒（一次性或每日定时都可取消）。需要提供提醒ID。",
     parameters={
@@ -732,7 +809,8 @@ async def do_list_reminders(
     for j in jobs:
         fire_at = datetime.fromisoformat(j.fire_at)
         if j.recurring == "daily":
-            lines.append(f"  [{j.id}] 🔄 每天 {j.daily_time}「{j.message}」by {j.creator_name}")
+            kind = "执行任务" if j.mode == "task" else "提醒"
+            lines.append(f"  [{j.id}] 🔄 每天 {j.daily_time} {kind}「{j.message}」by {j.creator_name}")
         else:
             remaining = (fire_at - datetime.now()).total_seconds()
             if remaining > 0:
@@ -753,14 +831,19 @@ async def do_list_reminders(
 @register_tool(
     name="get_group_chat_log",
     description=(
-        "检索当前群聊的历史消息记录。可按发送者昵称、QQ号、关键词、时间范围筛选。"
+        "检索群聊的历史消息记录。可按发送者昵称、QQ号、关键词、时间范围筛选。"
         "用途：查看某人最近说了什么、总结群聊内容、回顾讨论等。"
-        "注意：只能在群聊中使用，返回的是群内所有人的消息（不仅限@Bot的）。"
+        "返回的是群内所有人的消息（不仅限@Bot的）。"
+        "群聊中默认查当前群；私聊中查询群记录必须传 group_id。"
         "当用户@了某人时，你会收到该用户的QQ号，请用 user_id 参数检索。"
     ),
     parameters={
         "type": "object",
         "properties": {
+            "group_id": {
+                "type": "string",
+                "description": "群号。群聊中可省略（默认当前群）；私聊中查询某个群时必须提供。",
+            },
             "user_name": {
                 "type": "string",
                 "description": "按发送者昵称筛选（模糊匹配），例如: 小明",
@@ -775,30 +858,44 @@ async def do_list_reminders(
             },
             "hours": {
                 "type": "number",
-                "description": "查看最近多少小时的记录，默认 24",
+                "description": "查看最近多少小时的记录，默认 24。today=true 时忽略此项",
+            },
+            "today": {
+                "type": "boolean",
+                "description": "只看今天 00:00 之后的记录（生成“当天摘要”时使用）",
             },
             "limit": {
                 "type": "integer",
-                "description": "最多返回条数，默认 50",
+                "description": "最多返回条数，默认 50。总结当天群聊时建议设大一些（如 1000）",
             },
         },
     },
 )
 async def get_group_chat_log(
+    group_id: str = "",
     user_name: str = "",
     user_id: str = "",
     keyword: str = "",
     hours: float = 24,
+    today: bool = False,
     limit: int = 50,
     _context: dict | None = None,
     **kwargs,
 ) -> str:
-    if not _context or _context.get("_chat_type") != "group":
-        return "[错误] 此工具仅限群聊使用"
+    chat_type = (_context or {}).get("_chat_type", "")
+    if chat_type == "group":
+        group_id = str(_context.get("_target_id", ""))
+    elif not (chat_type == "private" and group_id):
+        return "[错误] 此工具仅限群聊使用；私聊中查询群聊记录请提供 group_id"
 
-    group_id = _context.get("_target_id", "")
-    if not group_id:
-        return "[错误] 无法获取群号"
+    group_id = str(group_id).strip()
+    if not group_id.isdigit():
+        return "[错误] 群号必须是纯数字"
+
+    if today:
+        now = datetime.now()
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        hours = max((now - midnight).total_seconds() / 3600, 1 / 60)
 
     from ..group.chatlog import load_chatlog
 
@@ -811,13 +908,15 @@ async def get_group_chat_log(
         limit=limit,
     )
 
+    range_label = "今天" if today else f"最近 {hours:g} 小时"
+
     if not entries:
         parts = []
         if user_name:
             parts.append(f"发送者含「{user_name}」")
         if keyword:
             parts.append(f"内容含「{keyword}」")
-        parts.append(f"最近 {hours} 小时")
+        parts.append(range_label)
         return f"未找到匹配的消息记录（{', '.join(parts)}）"
 
     lines: list[str] = []
@@ -832,7 +931,7 @@ async def get_group_chat_log(
         header += f", 发送者含「{user_name}」"
     if keyword:
         header += f", 内容含「{keyword}」"
-    header += f", 最近 {hours}h）:"
+    header += f", {range_label}）:"
 
     return header + "\n" + "\n".join(lines)
 

@@ -5,10 +5,10 @@
       <el-empty v-if="!reminders.length" description="暂无提醒" />
       <el-table v-else :data="reminders" stripe>
         <el-table-column prop="id" label="ID" width="100" />
-        <el-table-column label="类型" width="80">
+        <el-table-column label="类型" width="100">
           <template #default="{ row }">
-            <el-tag :type="row.recurring === 'daily' ? 'warning' : 'info'" size="small">
-              {{ row.recurring === 'daily' ? '每日' : '一次' }}
+            <el-tag :type="row.mode === 'task' ? 'success' : (row.recurring === 'daily' ? 'warning' : 'info')" size="small">
+              {{ row.mode === 'task' ? '每日任务' : (row.recurring === 'daily' ? '每日提醒' : '一次提醒') }}
             </el-tag>
           </template>
         </el-table-column>

@@ -113,6 +113,7 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 | `random_number` | 生成指定范围的随机整数 |
 | `set_reminder` | 一次性定时提醒（"X分钟后提醒我做Y"） |
 | `set_daily_reminder` | 每日定时提醒（"每天9点提醒我签到"） |
+| `set_daily_task` | 每日定时任务，由 Bot 自己执行并输出结果（"每天19点生成群聊摘要"） |
 | `read_file` | 读取文件内容。私聊（Admin）限 data/admin/、data/skills/、data/personas/；群聊限本群 data/groups/&lt;群号&gt;/（直接传相对路径如 MEMORY.md） |
 | `write_file` | 写入文件内容（覆盖）。范围同 read_file；群聊单次写入上限 20000 字符 |
 | `list_files` | 列出目录文件。范围同 read_file |
@@ -132,15 +133,16 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 
 工具调用优先级：Skill 工具 → 本地工具 → MCP 工具。
 
-### 定时提醒
+### 定时提醒与定时任务
 
-参考 OpenClaw 的 cron 调度器设计，内置定时提醒功能：
+参考 OpenClaw 的 cron 调度器设计，内置定时触发功能，分为两种模式：
 
 - **一次性提醒**："30分钟后提醒我开会" → `set_reminder`
-- **每日定时**："每天早上9点提醒我签到" → `set_daily_reminder`（持续触发直到取消）
+- **每日提醒**："每天早上9点提醒我签到" → `set_daily_reminder`（持续触发直到取消）
+- **每日任务**："每天19点生成当天群聊摘要" → `set_daily_task`（到点由 Bot 自己挂工具执行并输出结果，不是提醒用户）
 - **AI 生成消息**：提醒触发时自动加载群聊/私聊上下文，调用 LLM 生成自然的提醒消息（而非固定模板）
 - **持久化**：`data/reminders.json`，Bot 重启不丢失
-- 支持查看和取消已设置的提醒
+- 支持查看和取消已设置的提醒/任务
 
 ### 群聊全量记录
 

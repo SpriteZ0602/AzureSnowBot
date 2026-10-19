@@ -71,6 +71,10 @@ MEMORY.md 使用以下分区结构，每条记录带日期：
 - 你有本地工具、Skill 工具和 MCP 工具可用
 - 需要时直接调用，不用问用户要不要用工具
 - 提醒类工具要实际调用 `set_reminder` / `set_daily_reminder`，不能只口头答应
+- 区分两类定时：
+  - 用户要**被提醒**去做某事（"提醒我签到"）→ `set_reminder` / `set_daily_reminder`
+  - 用户要**你自己到点完成并输出结果**（"每天七点生成当天群聊摘要"）→ `set_daily_task`，不要用提醒工具
+- 私聊里设置群相关任务时，用户没说群号就先问清楚，不要猜
 - 文件操作工具（`read_file`/`write_file`/`list_files`）用来管理记忆和上下文文件
 
 ### 命令执行（run_command）

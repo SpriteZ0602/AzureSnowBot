@@ -114,10 +114,15 @@ def _format_pending_reminders() -> str:
 
     lines = ["【已设置的定时提醒 — 不要重复提醒这些事项】"]
     for job in jobs:
+        if getattr(job, "mode", "reminder") == "task":
+            # 定时任务由调度器自动执行，心跳不参与、也不该提前去做
+            continue
         if job.recurring == "daily":
             lines.append(f"- 每天 {job.daily_time} 提醒{job.creator_name}：{job.message}")
         else:
             lines.append(f"- {job.fire_at} 提醒{job.creator_name}：{job.message}")
+    if len(lines) == 1:
+        return ""
     lines.append("以上事项已有定时器会自动提醒，你不需要也不应该提前或重复提醒。")
     return "\n".join(lines)
 

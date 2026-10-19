@@ -63,6 +63,8 @@ class ReminderJob:
     created_at: str        # ISO 格式创建时间
     recurring: str = ""    # 空 = 一次性，"daily" = 每日定时
     daily_time: str = ""   # HH:MM 格式，仅 recurring="daily" 时有效
+    mode: str = "reminder" # "reminder" = 提醒用户去做；"task" = Bot 自己执行并输出结果
+    group_id: str = ""     # 任务涉及的群号（私聊创建群任务时使用）
 
 
 # ──────────────────── 运行时状态 ────────────────────
@@ -184,6 +186,166 @@ def _load_conversation(job: ReminderJob) -> tuple[str, list[dict]]:
         return "你是一个有用的助手。", []
 
 
+# ──────────────────── 定时任务执行（mode="task"） ────────────────────
+
+def _build_task_system_prompt(job: ReminderJob) -> tuple[str, dict]:
+    """构建任务执行用的 system prompt 与工具上下文。"""
+    from ..runtime_context import build_runtime_context
+
+    if job.chat_type == "group":
+        from ..persona.manager import (
+            get_active_persona, load_persona_prompt,
+            load_group_memory,
+        )
+        from ..skill.manager import build_catalog_prompt
+
+        persona = get_active_persona(job.target_id)
+        prompt = load_persona_prompt(persona, job.target_id) or "你是一个有用的助手。"
+        memory = load_group_memory(job.target_id)
+        if memory:
+            prompt += "\n\n" + memory
+        catalog = build_catalog_prompt(chat_type="group")
+        if catalog:
+            prompt += "\n" + catalog
+        prompt += build_runtime_context(chat_type="group")
+        tool_ctx = {
+            "_chat_type": "group",
+            "_target_id": job.target_id,
+            "_user_id": job.user_id,
+            "_sender_name": job.creator_name,
+        }
+    else:
+        from ..chat.handler import load_admin_prompt
+        from ..skill.manager import build_catalog_prompt
+
+        prompt = load_admin_prompt() or "你是一个有用的助手。"
+        catalog = build_catalog_prompt(chat_type="private")
+        if catalog:
+            prompt += "\n" + catalog
+        prompt += build_runtime_context(chat_type="private")
+        tool_ctx = {
+            "_chat_type": "private",
+            "_target_id": job.target_id,
+            "_user_id": job.user_id,
+            "_sender_name": job.creator_name,
+        }
+    return prompt, tool_ctx
+
+
+async def _execute_scheduled_task(job: ReminderJob) -> str:
+    """
+    执行 mode="task" 的定时任务：挂完整工具链跑 Agentic Loop，
+    让模型自己完成任务并返回最终结果（而不是提醒用户去做）。
+    """
+    fallback = f"（定时任务执行失败）{job.message}"
+
+    try:
+        from ..llm import call_llm
+        from ..local_tools.manager import (
+            get_openai_tools as local_openai_tools,
+            handle_tool_call as local_handle_tool_call,
+        )
+        from ..skill.manager import (
+            get_openai_tools as skill_openai_tools,
+            handle_tool_call as skill_handle_tool_call,
+        )
+        from ..mcp.manager import (
+            get_openai_tools as mcp_openai_tools,
+            call_tool as mcp_call_tool,
+            MAX_TOOL_ROUNDS,
+        )
+        from ..runtime_context import build_time_context
+
+        system_prompt, tool_ctx = _build_task_system_prompt(job)
+        local_tools = local_openai_tools(chat_type=job.chat_type)
+        openai_tools = skill_openai_tools() + local_tools + mcp_openai_tools()
+
+        group_hint = ""
+        if job.chat_type == "private" and job.group_id:
+            group_hint = (
+                f"\n任务相关群号：{job.group_id}。"
+                f"调用 get_group_chat_log 时传 group_id=\"{job.group_id}\"。"
+            )
+
+        instruction = (
+            "【系统指令 — 每日定时任务触发】\n"
+            f"{build_time_context()}\n"
+            "这是用户设置的每日定时任务，现在由你**亲自执行并直接输出最终结果**。"
+            "这不是提醒用户去做，不要回复“提醒你去…”，也不要反问用户是否要执行。\n"
+            "要求：\n"
+            "1. 需要数据就调用工具获取；中间过程不要发给用户。\n"
+            "2. 只在最后输出一次结果。\n"
+            f"3. 任务：{job.message}\n"
+            "4. 若任务需要总结“当天”群聊：调用 get_group_chat_log 时设 today=true，"
+            "limit 调大（如 1000）。"
+            f"{group_hint}"
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": instruction},
+        ]
+
+        for round_idx in range(MAX_TOOL_ROUNDS):
+            data = await call_llm(messages, tools=openai_tools or None, source="task")
+            assistant_msg = data["choices"][0]["message"]
+            tool_calls = assistant_msg.get("tool_calls")
+
+            if not tool_calls:
+                reply = (assistant_msg.get("content") or "").strip()
+                return reply or fallback
+
+            messages.append(assistant_msg)
+            logger.info(
+                f"定时任务 [{job.id}] 工具调用 (round {round_idx + 1}): "
+                f"{[tc['function']['name'] for tc in tool_calls]}"
+            )
+
+            for tc in tool_calls:
+                fn_name = tc["function"]["name"]
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    fn_args = {}
+
+                skill_result = skill_handle_tool_call(fn_name, fn_args)
+                if skill_result is not None:
+                    tool_result = skill_result
+                else:
+                    local_result = await local_handle_tool_call(
+                        fn_name, fn_args, context=tool_ctx,
+                    )
+                    if local_result is not None:
+                        tool_result = local_result
+                    else:
+                        tool_result = await mcp_call_tool(fn_name, fn_args)
+
+                from ..tool_log import log_tool_call
+                log_tool_call(
+                    "task", fn_name, fn_args, tool_result,
+                    user_id=job.user_id,
+                    group_id=job.group_id if job.chat_type == "private" else job.target_id,
+                )
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": tool_result,
+                })
+
+        # 工具轮次用尽：不带工具再调一次，让模型基于已有信息给结果
+        messages.append({
+            "role": "user",
+            "content": "请根据已获取到的信息，直接输出最终结果。",
+        })
+        final_data = await call_llm(messages, source="task")
+        reply = (final_data["choices"][0]["message"].get("content") or "").strip()
+        return reply or fallback
+
+    except Exception as e:
+        logger.error(f"定时任务执行失败 [{job.id}]「{job.message}」: {e}")
+        return fallback
+
+
 # ──────────────────── 写入聊天历史 ────────────────────
 
 def _append_to_history(job: ReminderJob, text: str) -> None:
@@ -282,7 +444,10 @@ async def _fire_daily(job: ReminderJob) -> None:
 
         try:
             bot = get_bot()
-            text = await _generate_reminder_message(job)
+            if job.mode == "task":
+                text = await _execute_scheduled_task(job)
+            else:
+                text = await _generate_reminder_message(job)
 
             # 分条发送
             await send_chunked_raw(bot, job.chat_type, int(job.target_id), text)
@@ -293,7 +458,8 @@ async def _fire_daily(job: ReminderJob) -> None:
             # Admin 私聊提醒触发后重置主动发言计时器，防止时间重叠
             _reset_proactive_if_admin(job)
 
-            logger.info(f"每日提醒已触发: [{job.id}] {job.daily_time} | {job.message}")
+            kind = "任务" if job.mode == "task" else "提醒"
+            logger.info(f"每日{kind}已触发: [{job.id}] {job.daily_time} | {job.message}")
         except Exception as e:
             logger.error(f"每日提醒发送失败 [{job.id}]: {e}")
 
@@ -337,8 +503,29 @@ def _find_duplicate_oneshot(
 
 def _find_duplicate_daily(
     chat_type: str, target_id: str, message: str, daily_time: str,
+    mode: str = "reminder",
 ) -> ReminderJob | None:
-    """检查是否已存在完全相同的每日提醒（同会话 + 同事项 + 同时刻）。"""
+    """检查是否已存在完全相同的每日提醒/任务（同会话 + 同模式 + 同时刻）。"""
+    for job in _jobs.values():
+        if (
+            job.chat_type == chat_type
+            and job.target_id == target_id
+            and job.recurring == "daily"
+            and job.daily_time == daily_time
+            and job.mode == mode
+        ):
+            return job
+    return None
+
+
+def _find_daily_slot(
+    chat_type: str, target_id: str, daily_time: str,
+) -> ReminderJob | None:
+    """查找占用同一会话同一时刻的每日提醒/任务（不区分模式）。
+
+    同一时刻只保留一个每日任务：新的请求会替换旧的不同模式任务，
+    避免提醒和任务在同一分钟内同时触发。
+    """
     for job in _jobs.values():
         if (
             job.chat_type == chat_type
@@ -419,6 +606,12 @@ def add_daily_reminder(
         logger.warning(f"提醒去重: [{dup.id}] 已存在相同每日提醒「{message}」@ {daily_time}")
         return dup.id, fire_str
 
+    # 同一时刻已被定时任务占用 → 用提醒替换它，避免一分钟内重复触发
+    slot = _find_daily_slot(chat_type, target_id, daily_time)
+    if slot:
+        logger.info(f"替换同时刻每日任务 [{slot.id}]「{slot.message}」→ 每日提醒「{message}」")
+        cancel_reminder(slot.id)
+
     job_id = uuid.uuid4().hex[:8]
     now = datetime.now()
     next_fire = _next_daily_fire(daily_time)
@@ -446,13 +639,83 @@ def add_daily_reminder(
     return job_id, fire_str
 
 
+def add_daily_task(
+    chat_type: str,
+    target_id: str,
+    user_id: str,
+    creator_name: str,
+    task: str,
+    daily_time: str,
+    group_id: str = "",
+) -> tuple[str, str]:
+    """
+    添加一条每日定时任务：到点由 Bot 自己执行并输出结果，而不是提醒用户。
+
+    参数:
+        daily_time: "HH:MM" 格式
+        group_id:   任务涉及的群号（私聊创建群任务时使用）
+
+    返回 (job_id, 下次执行时间字符串)。
+    """
+    # ── 防重：同会话 + 同模式 + 同时刻 ──
+    dup = _find_duplicate_daily(chat_type, target_id, task, daily_time, mode="task")
+    if dup:
+        fire_str = datetime.fromisoformat(dup.fire_at).strftime("%m-%d %H:%M")
+        logger.warning(f"任务去重: [{dup.id}] 已存在同时刻每日任务「{task}」@ {daily_time}")
+        return dup.id, fire_str
+
+    # 同一时刻已有每日提醒（例如此前设的“提醒我去生成摘要”）→
+    # 用户现在要求自动执行，直接替换掉旧提醒，避免两条同时触发。
+    slot = _find_daily_slot(chat_type, target_id, daily_time)
+    if slot:
+        logger.info(f"替换同时刻每日提醒 [{slot.id}]「{slot.message}」→ 每日任务「{task}」")
+        cancel_reminder(slot.id)
+
+    job_id = uuid.uuid4().hex[:8]
+    now = datetime.now()
+    next_fire = _next_daily_fire(daily_time)
+
+    job = ReminderJob(
+        id=job_id,
+        chat_type=chat_type,
+        target_id=target_id,
+        user_id=user_id,
+        creator_name=creator_name,
+        message=task,
+        fire_at=next_fire.isoformat(),
+        created_at=now.isoformat(),
+        recurring="daily",
+        daily_time=daily_time,
+        mode="task",
+        group_id=group_id or (target_id if chat_type == "group" else ""),
+    )
+    _jobs[job_id] = job
+    _save()
+
+    task_handle = asyncio.get_running_loop().create_task(_fire_daily(job))
+    _tasks[job_id] = task_handle
+
+    fire_str = next_fire.strftime("%m-%d %H:%M")
+    logger.info(f"每日任务已设置: [{job_id}] 每天 {daily_time} | {task}")
+    return job_id, fire_str
+
+
+def _is_current_task(task: asyncio.Task) -> bool:
+    """判断 task 是否为当前正在执行的任务（无事件循环时返回 False）。"""
+    try:
+        return task is asyncio.current_task()
+    except RuntimeError:
+        return False
+
+
 def cancel_reminder(job_id: str) -> bool:
     """取消一条提醒（一次性或每日）。返回是否成功。"""
     job = _jobs.pop(job_id, None)
     if not job:
         return False
     task = _tasks.pop(job_id, None)
-    if task and not task.done():
+    # 不要 cancel 当前正在执行的任务（任务内部可能调用工具触发替换/取消）
+    if task and not task.done() and not _is_current_task(task):
         task.cancel()
     _save()
     logger.info(f"提醒已取消: [{job_id}]")
@@ -481,7 +744,7 @@ def clear_reminders(chat_type: str, target_id: str) -> int:
     for jid in to_remove:
         _jobs.pop(jid, None)
         task = _tasks.pop(jid, None)
-        if task and not task.done():
+        if task and not task.done() and not _is_current_task(task):
             task.cancel()
     if to_remove:
         _save()
