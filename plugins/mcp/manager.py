@@ -300,7 +300,10 @@ async def call_tool(full_name: str, arguments: dict) -> str:
                     parts.append(f"[binary data: {block.mimeType}]")
                 else:
                     parts.append(str(block))
-            return "\n".join(parts) if parts else "[工具无返回内容]"
+            text = "\n".join(parts) if parts else "[工具无返回内容]"
+            if getattr(result, "isError", False) is True:
+                return f"[工具调用出错] {text}"
+            return text
         except Exception as e:
             logger.error(f"MCP 工具调用失败 [{full_name}]: {e}")
             return f"[工具调用出错] {e}"

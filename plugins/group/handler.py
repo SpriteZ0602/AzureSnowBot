@@ -134,6 +134,7 @@ async def _handle_group_chat(
         "_target_id": group_id,
         "_user_id": str(event.user_id),
         "_sender_name": sender,
+        "_persona": active_persona,
     }
 
     # 组装用户消息（带发送者标识 + 引用内容）
@@ -261,6 +262,8 @@ async def _handle_group_chat(
                 from ..tool_log import log_tool_call
                 log_tool_call("group", fn_name, fn_args, tool_result,
                               user_id=str(event.user_id), group_id=group_id)
+                from ..tool_history import record_tool_execution
+                record_tool_execution(fn_name, fn_args, tool_result, context=_tool_context)
 
                 messages.append({
                     "role": "tool",

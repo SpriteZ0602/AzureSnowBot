@@ -213,6 +213,7 @@ def _build_task_system_prompt(job: ReminderJob) -> tuple[str, dict]:
             "_target_id": job.target_id,
             "_user_id": job.user_id,
             "_sender_name": job.creator_name,
+            "_persona": persona,
         }
     else:
         from ..chat.handler import load_admin_prompt
@@ -325,6 +326,8 @@ async def _execute_scheduled_task(job: ReminderJob) -> str:
                     user_id=job.user_id,
                     group_id=job.group_id if job.chat_type == "private" else job.target_id,
                 )
+                from ..tool_history import record_tool_execution
+                record_tool_execution(fn_name, fn_args, tool_result, context=tool_ctx, source="task")
 
                 messages.append({
                     "role": "tool",

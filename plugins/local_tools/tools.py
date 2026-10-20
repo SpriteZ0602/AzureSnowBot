@@ -16,6 +16,7 @@ from pathlib import Path
 from nonebot.log import logger
 
 from .manager import register_tool
+from ..tool_history import summarize_web_search, summarize_web_read
 
 # ──────────────────────────────────────────────────────
 # 文件系统工具（私聊 Admin 限定，群聊限定本群目录）
@@ -434,6 +435,9 @@ async def run_sub_agent(
 
     # 工具调用上下文（继承主 Agent 的上下文）
     tool_context = dict(_context) if _context else {}
+    if tool_context.get("_chat_type") == "group" and not tool_context.get("_persona"):
+        from ..persona.manager import get_active_persona
+        tool_context["_persona"] = get_active_persona(str(tool_context.get("_target_id", "")))
 
     try:
         async with httpx.AsyncClient(timeout=120) as client:
@@ -474,6 +478,8 @@ async def run_sub_agent(
 
                     from ..tool_log import log_tool_call
                     log_tool_call("sub_agent", fn_name, fn_args, tool_result)
+                    from ..tool_history import record_tool_execution
+                    record_tool_execution(fn_name, fn_args, tool_result, context=tool_context, source="sub_agent")
 
                     messages.append({
                         "role": "tool",
@@ -1219,6 +1225,7 @@ async def _deepseek_fetch(url: str, max_chars: int = 6000) -> str:
 
 @register_tool(
     name="web_read",
+    history_formatter=summarize_web_read,
     description=(
         "读取指定网页的内容，返回 Markdown 格式的正文。"
         "用途：查看某个链接的完整内容、阅读文章、获取网页信息。"
@@ -1243,6 +1250,7 @@ async def web_read_tool(url: str = "", **kwargs) -> str:
 
 @register_tool(
     name="web_search",
+    history_formatter=summarize_web_search,
     description=(
         "使用 DeepSeek 搜索互联网获取实时信息。"
         "返回标题、URL、长摘要；默认同时返回前几个结果的高质量正文。"

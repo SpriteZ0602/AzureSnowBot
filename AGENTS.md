@@ -124,6 +124,13 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 3. 最多 10 轮（`MAX_TOOL_ROUNDS`）
 4. 工具优先级：Skill 工具 → 本地工具 → MCP 工具
 
+### 群聊工具执行记录
+
+- `plugins/tool_history.py` 统一将简短执行凭证写进当前群、执行开始时人格的 JSONL，`role=assistant`，不发到 QQ。
+- 覆盖群主对话、群心跳、定时任务、Sub-Agent 及 `/塔罗` 指令；参数最多 200 字符，结果摘要最多 600 字符，不另存工具全文。
+- 本地工具可通过 `@register_tool(history_formatter=...)` 定制摘要；默认短结果完整、长结果截断。MCP/Skill 使用默认摘要。
+- Compaction 必须保留仍相关的执行事实和结果，不能把口头承诺总结成已执行。
+
 ### 消息分条发送（Chunker）
 `plugins/chunker.py` 提供两个发送函数：
 - `send_chunked(bot, event, chunks)` — 需要 event 对象，用于普通回复

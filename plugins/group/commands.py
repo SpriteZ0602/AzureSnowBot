@@ -331,7 +331,13 @@ async def handle_tarot(event: GroupMessageEvent):
             + "牌数需要是 1-5 之间的数字，例如：/塔罗 3 我明天能升职吗"
         )
 
+    group_id = str(event.group_id)
+    active_persona = get_active_persona(group_id)
     cards = draw_cards(num)
+    from ..tool_history import record_tool_execution
+    record_tool_execution("command:/塔罗", {"num": num, "question": question}, format_cards(cards),
+                          context={"_chat_type": "group", "_target_id": group_id,
+                                   "_persona": active_persona}, source="command")
 
     # 第一步：先发牌面
     from nonebot import get_bot
@@ -341,8 +347,6 @@ async def handle_tarot(event: GroupMessageEvent):
     await send_chunked(bot, event, chunk_text(cards_text))
 
     # 第二步：人格 + 运行时上下文 → LLM 解读（带上最近的群聊上下文）
-    group_id = str(event.group_id)
-    active_persona = get_active_persona(group_id)
     system_prompt = load_persona_prompt(active_persona, group_id)
     if not system_prompt:
         system_prompt = "你是一个有用的助手，请用中文回答用户的问题。"

@@ -41,6 +41,7 @@ class LocalTool:
     parameters: dict[str, Any]  # JSON Schema 格式
     execute: Callable[..., Awaitable[str] | str]
     admin_only: bool = False
+    history_formatter: Callable[[dict, str], str] | None = None
 
 
 # ──────────────────── 全局注册表 ────────────────────
@@ -52,6 +53,7 @@ def register_tool(
     description: str,
     parameters: dict[str, Any] | None = None,
     admin_only: bool = False,
+    history_formatter: Callable[[dict, str], str] | None = None,
 ) -> Callable:
     """
     工具注册装饰器。
@@ -61,6 +63,7 @@ def register_tool(
         description: 工具描述（LLM 可见）
         parameters: JSON Schema 格式的参数定义，None 表示无参数
         admin_only: 是否仅 Admin 私聊可用
+        history_formatter: 可选的历史摘要函数；不改变当前轮工具结果
 
     示例:
         @register_tool(
@@ -86,6 +89,7 @@ def register_tool(
             parameters=parameters,
             execute=func,
             admin_only=admin_only,
+            history_formatter=history_formatter,
         )
         _registry[name] = tool
         logger.info(f"已注册本地工具: {TOOL_PREFIX}__{name} — {description[:50]}")

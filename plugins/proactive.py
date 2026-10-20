@@ -312,6 +312,7 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
             "_sender_name": "系统心跳",
         }
         local_tools = local_openai_tools(chat_type="group")
+        tool_ctx["_persona"] = persona
 
     heartbeat_history = trimmed[-HEARTBEAT_MAX_MESSAGES:]
 
@@ -380,6 +381,8 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
 
                 from .tool_log import log_tool_call
                 log_tool_call("heartbeat", fn_name, fn_args, tool_result)
+                from .tool_history import record_tool_execution
+                record_tool_execution(fn_name, fn_args, tool_result, context=tool_ctx, source="heartbeat")
 
                 messages.append({
                     "role": "tool",
