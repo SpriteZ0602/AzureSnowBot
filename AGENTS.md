@@ -141,7 +141,15 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 - 合并转发最多 3 层、100 节点、4 张图片、50000 字符；预览 6000 字符，`local__read_message_content` 按本群分页读取余下文字。
 - `plugins/message_store.py` 在 `chatlog.db` 的独立表保存引用与有限文本；转发缓存 24 小时，其他引用最长 365 天，总文本预算 50 MiB；不保存图片二进制。
 
-### 消息发送接口
+### 图片识别后的上下文
+
+- 群图片只登记 URL 和稳定标识，不下载原图。首次引用（或请求分析含图的合并转发）时，在正常 LLM 请求中开启 JSON 输出，同时生成 `reply` 和 `image_notes`，只发送 `reply`。
+- `plugins/image_context.py` 校验本轮图片标识、保存描述/OCR/不确定项，并原子替换当前人格 JSONL 以及本群聊天记录中的图片占位；描述最多 300 字、OCR 最多 1000 字。
+- 后续引用复用笔记，普通追问直接读取历史文字；引用图片并明确说“重新识别/看原图/重读图片”时刷新 QQ 消息再识别。
+- 失败或无效 JSON 不替换占位，也不向群发原始 JSON。历史被 reset 后，替换操作不得恢复旧历史；图片描述参与正常 Compaction。
+- `call_llm(..., response_format=None)` 可选传入 JSON 响应格式，普通对话保持纯文本输出。
+
+### 消息发送函数
 `plugins/chunker.py` 提供两个发送函数：
 - `send_chunked(bot, event, chunks)` — 需要 event 对象，用于普通回复
 - `send_chunked_raw(bot, chat_type, target_id, text)` — 不需要 event，用于主动推送（提醒 / 主动发言）

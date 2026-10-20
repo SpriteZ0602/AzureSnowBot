@@ -115,11 +115,14 @@ class MessageResolver:
                     parts.append(f"@{nickname}({qq})" if nickname else f"@{qq}")
             elif kind == "image":
                 url = str(data.get("url") or "")
-                identity = f"{origin}:{index}:{data.get('file') or url.split('?', 1)[0]}"
+                # NoneBot 会移除 @Bot 段，数组位置在事件与 get_msg 中可能不同。
+                # 同一原消息里的同一图片按 file/URL 标识定位，不依赖段下标。
+                identity = f"{origin}:{data.get('file') or url.split('?', 1)[0] or index}"
                 iid = "img_" + hashlib.sha256(identity.encode()).hexdigest()[:20]
                 if len(self.images) < MAX_IMAGES and url and all(i.image_id != iid for i in self.images):
                     self.images.append(ImageRef(iid, url))
-                parts.append(image_marker(iid))
+                from .image_context import register_image
+                parts.append(register_image(self.group_id, ImageRef(iid, url), origin))
             elif kind == "forward":
                 parts.append(await self._forward(data, origin=f"{origin}:{index}", depth=depth))
             elif kind == "face":
@@ -142,7 +145,8 @@ class MessageResolver:
                 for img in cached.get("images", []):
                     if len(self.images) < MAX_IMAGES and all(i.image_id != img["image_id"] for i in self.images):
                         self.images.append(ImageRef(**img))
-                return f"\n[合并转发 {ref}]\n{_preview(cached['text'], ref)}\n[转发结束]\n"
+                from .image_context import hydrate_text
+                return f"\n[合并转发 {ref}]\n{_preview(hydrate_text(self.group_id, cached['text']), ref)}\n[转发结束]\n"
             nodes = data.get("content")
             if nodes is None:
                 response = await self.bot.get_forward_msg(id=fid)
@@ -187,7 +191,7 @@ async def resolve_quoted_message(bot, group_id: str, message_id: int, *, self_id
             value = ResolvedMessage.from_payload(cached)
             value.text = _preview(value.text, f"qq:{message_id}")
             return value
-        if reply is not None and getattr(reply, "message", None) is not None:
+        if not refresh and reply is not None and getattr(reply, "message", None) is not None:
             raw, sender = reply.message, getattr(reply, "sender", None) or {}
             author = sender.get("nickname") if isinstance(sender, dict) else getattr(sender, "nickname", "")
         else:

@@ -11,6 +11,7 @@ import importlib.util
 import types
 from pathlib import Path
 from unittest.mock import MagicMock
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -47,6 +48,12 @@ _utils_spec.loader.exec_module(_mod)
 
 extract_text = _mod.extract_text
 fetch_quoted_text = _mod.fetch_quoted_text
+
+
+@pytest.fixture(autouse=True)
+def _isolated_message_index(tmp_path, monkeypatch):
+    from plugins import message_store
+    monkeypatch.setattr(message_store, "DB_PATH", tmp_path / "chatlog.db")
 
 
 # ──────────────────── 测试替身 ────────────────────

@@ -1353,7 +1353,8 @@ async def read_message_content(reference: str = "", offset: int = 0, limit: int 
         return "[错误] offset 和 limit 必须为整数"
     if not payload or "text" not in payload:
         return "[错误] 本群没有这条引用记录，或内容已经过期"
-    text = payload["text"]
+    from ..image_context import hydrate_text
+    text = hydrate_text(str(_context.get("_target_id", "")), payload["text"])
     end = min(len(text), offset + limit)
     return f"引用 {reference}，字符 {offset}:{end}/{len(text)}\n{text[offset:end]}" + (
         f"\n[还有内容，下一页 offset={end}]" if end < len(text) else "\n[内容结束]")

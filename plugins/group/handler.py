@@ -18,6 +18,10 @@ from nonebot.log import logger
 
 from ..chunker import chunk_text, send_chunked
 from ..runtime_context import build_runtime_context, build_time_context
+from ..image_context import (
+    FAILURE_REPLY, apply_image_notes, cached_note, decode_visual_response,
+    visual_instruction, wants_image_refresh,
+)
 from ..persona.manager import (
     get_active_persona, load_persona_prompt,
     load_history, append_message, get_group_config,
@@ -42,7 +46,7 @@ from ..llm import (
 from ..proactive import reset_idle_timer as reset_group_proactive_timer
 from .utils import (
     in_whitelist, is_at_bot, extract_text, is_group_event,
-    get_reply_id, fetch_quoted_text, fetch_quoted_image_urls, trim_history,
+    get_reply_id, trim_history,
     get_session_lock,
 )
 
@@ -96,16 +100,29 @@ async def _handle_group_chat(
 
     # 检查是否引用了消息
     quoted_text = ""
-    quoted_image_urls: list[str] = []
+    quoted_images = []
+    refresh_images = wants_image_refresh(user_input)
     reply_id = get_reply_id(event)
     if reply_id:
         bot = get_bot()
         from ..message_parser import resolve_quoted_message
         quoted = await resolve_quoted_message(bot, group_id, reply_id,
-                                              self_id=str(event.self_id), reply=event.reply)
+                                              self_id=str(event.self_id), reply=event.reply,
+                                              refresh=refresh_images)
         quoted_author, quoted_text = quoted.author, quoted.text
-        if SUPPORTS_VISION:
-            quoted_image_urls = [image.url for image in quoted.images]
+        quoted_images = quoted.images
+    else:
+        from ..message_parser import MessageResolver, segments
+        if any(seg.get("type") == "forward" for seg in segments(event.message)):
+            incoming = await MessageResolver(get_bot(), group_id, str(event.self_id)).resolve(
+                event.message, origin=f"qq:{event.message_id}")
+            quoted_images = incoming.images
+
+    known_notes = [note for image in quoted_images if (note := cached_note(group_id, image.image_id))]
+    if known_notes:
+        apply_image_notes(group_id, active_persona, known_notes)
+    pending_images = [image for image in quoted_images
+                      if SUPPORTS_VISION and image.url and (refresh_images or not cached_note(group_id, image.image_id))]
 
     sender = event.sender.nickname or str(event.user_id)
 
@@ -150,12 +167,13 @@ async def _handle_group_chat(
     append_message(group_id, user_msg, active_persona)
 
     # 如果引用的消息包含图片，构建多模态 content（仅用于 LLM 请求，不存历史）
-    if quoted_image_urls:
+    if pending_images:
         multimodal_content: list[dict] = [{"type": "text", "text": content_text}]
-        for img_url in quoted_image_urls:
+        for image in pending_images:
+            multimodal_content.append({"type": "text", "text": f"图片标识：{image.image_id}"})
             multimodal_content.append({
                 "type": "image_url",
-                "image_url": {"url": img_url},
+                "image_url": {"url": image.url},
             })
         llm_user_msg = {"role": "user", "content": multimodal_content}
     else:
@@ -176,23 +194,23 @@ async def _handle_group_chat(
 
     trimmed = trim_history(history, system_prompt)
 
-    # 组装 messages：最后一条用 LLM 版本（可能含图片），其余用纯文本
-    messages = [{'role': 'system', 'content': system_prompt}] + trimmed[:-1]
-    if trimmed:
-        # 如果最后一条是刚发的用户消息且有图片，替换为多模态版本
-        if quoted_image_urls and trimmed[-1].get('content') == content_text:
-            messages.append(llm_user_msg)
+    # 组装 messages：定位本次用户消息并附图，其他历史保持纯文本。
+    messages = [{'role': 'system', 'content': system_prompt}] + [dict(msg) for msg in trimmed]
+    if pending_images:
+        # listen/compaction 期间可能追加新群消息，当前用户消息不一定是末条。
+        for message in reversed(messages):
+            if message.get("role") == "user" and message.get("content") == content_text:
+                message["content"] = llm_user_msg["content"]
+                break
         else:
-            messages.append(trimmed[-1])
-    elif quoted_image_urls:
-        messages.append(llm_user_msg)
+            messages.append(llm_user_msg)
 
     # 动态时间行每轮都变，作为独立 system 消息放在 messages 最末尾。
     # 绝不能拼进 system prompt——那会让 prefix cache 在 system 处断掉，
     # 整个对话历史每轮缓存全部 miss。
     messages.append({
         'role': 'system',
-        'content': build_time_context(last),
+        'content': build_time_context(last) + ("\n" + visual_instruction(pending_images) if pending_images else ""),
     })
 
     headers = {
@@ -207,17 +225,28 @@ async def _handle_group_chat(
     # 合并 MCP 工具 + Skill 工具 + 本地工具（群聊过滤 admin_only 工具）
     openai_tools = get_openai_tools() + skill_openai_tools() + local_openai_tools(chat_type="group")
 
+    def readable_reply(assistant_msg: dict, *, final: bool = False) -> str:
+        content = assistant_msg.get("content") or ""
+        if not pending_images:
+            return content.strip()
+        reply, notes = decode_visual_response(content, pending_images)
+        if notes:
+            apply_image_notes(group_id, active_persona, notes)
+        return reply or (FAILURE_REPLY if final else "")
+
+    format_kwargs = {"response_format": {"type": "json_object"}} if pending_images else {}
+
     try:
         from ..llm import call_llm
         # ── Agentic Loop ──
         for round_idx in range(MAX_TOOL_ROUNDS):
-            data = await call_llm(messages, tools=openai_tools or None, source="group")
+            data = await call_llm(messages, tools=openai_tools or None, source="group", **format_kwargs)
             choice = data["choices"][0]
             assistant_msg = choice["message"]
 
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
-                reply = (assistant_msg.get("content") or "").strip()
+                reply = readable_reply(assistant_msg, final=True)
                 if reply:
                     append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
                     bot = get_bot()
@@ -233,7 +262,7 @@ async def _handle_group_chat(
             # 模型可以在同一次回复里既输出文字又调用工具：
             # 文字（"我来查一下…"）先发给用户，再继续执行工具调用。
             # 原本这段文字会被直接丢弃（不进历史、不发消息）。
-            prelude = (assistant_msg.get("content") or "").strip()
+            prelude = readable_reply(assistant_msg)
             if prelude:
                 append_message(group_id, {"role": "assistant", "content": prelude}, active_persona)
                 bot = get_bot()
@@ -276,8 +305,8 @@ async def _handle_group_chat(
         # 超过最大轮次 — 不带工具再调一次，让 LLM 根据已有信息总结回复
         messages.append({"role": "user", "content": "你已经无法再调用工具了，请根据上面已经获取到的信息，直接回答用户的问题。"})
         try:
-            final_data = await call_llm(messages, source="group")
-            reply = (final_data["choices"][0]["message"].get("content") or "").strip()
+            final_data = await call_llm(messages, source="group", **format_kwargs)
+            reply = readable_reply(final_data["choices"][0]["message"], final=True)
         except Exception:
             reply = "（工具调用轮次已达上限，请重新提问）"
         if reply:

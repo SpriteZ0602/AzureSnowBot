@@ -93,6 +93,22 @@ def cleanup_context() -> None:
         conn.close()
 
 
+def replace_chatlog_content(group_id: str, replacements: dict[str, str]) -> None:
+    """同步更新本群原消息的图片文字，不改变时间、作者或原聊天记录表结构。"""
+    if not str(group_id).isdigit():
+        return
+    conn = _connect()
+    try:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").fetchone():
+            return
+        with conn:
+            for marker, description in replacements.items():
+                conn.execute("UPDATE messages SET text=replace(text,?,?) WHERE group_id=? AND instr(text,?)>0",
+                             (marker, description, str(group_id), marker))
+    finally:
+        conn.close()
+
+
 def remember_sent_message(group_id: str, response: dict, text: str, author: str) -> None:
     mid = response.get("message_id")
     fid = response.get("res_id") or response.get("forward_id")

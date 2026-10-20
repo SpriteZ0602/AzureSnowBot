@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from threading import Lock
 
@@ -91,3 +92,35 @@ def rewrite_compacted_history(
                 temp_path.unlink()
 
         return final_messages
+
+
+def replace_history_content(path: Path, replacements: dict[str, str]) -> bool:
+    """在最新历史上原子替换图片占位，保留并发追加；不创建已 reset 的文件。"""
+    if not replacements:
+        return False
+    pattern = re.compile("|".join(re.escape(key) for key in replacements))
+    with _history_lock(path):
+        if not path.exists():
+            return False
+        messages = _read_unlocked(path)
+        changed = False
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str):
+                updated = pattern.sub(lambda match: replacements[match.group(0)], content)
+                changed |= updated != content
+                message["content"] = updated
+        if not changed:
+            return False
+        temp_path = path.with_name(f".{path.name}.images.tmp")
+        try:
+            with temp_path.open("w", encoding="utf-8") as file:
+                for message in messages:
+                    file.write(json.dumps(message, ensure_ascii=False) + "\n")
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temp_path, path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+        return True

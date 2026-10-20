@@ -89,6 +89,17 @@ def _make_error_response(status_code: int) -> httpx.HTTPStatusError:
 class TestCallLlmFallback:
 
     @pytest.mark.asyncio
+    async def test_json_format_is_forwarded_to_primary_and_fallback(self):
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+        client.post.side_effect = [_make_error_response(429), _make_success_response('{"reply":"ok"}')]
+        with patch("httpx.AsyncClient", return_value=client):
+            await call_llm([{"role": "user", "content": "return json"}], response_format={"type": "json_object"})
+        assert client.post.await_count == 2
+        assert all(call.kwargs["json"]["response_format"] == {"type": "json_object"} for call in client.post.await_args_list)
+
+    @pytest.mark.asyncio
     async def test_primary_success(self):
         """主力成功时直接返回，不触发 fallback。"""
         mock_client = AsyncMock()

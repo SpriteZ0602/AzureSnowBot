@@ -179,6 +179,7 @@ async def call_llm(
     tools: list[dict] | None = None,
     source: str = "unknown",
     timeout: int = 120,
+    response_format: dict | None = None,
 ) -> dict:
     """
     调用 LLM API，失败时自动 fallback 到备用模型。
@@ -191,6 +192,7 @@ async def call_llm(
         tools: 工具定义列表（可选）
         source: 来源标识，用于 token 统计
         timeout: 请求超时秒数
+        response_format: 可选的结构化响应格式（仅需要图片笔记等场景传入）
     """
     from .token_stats import record_usage
 
@@ -216,6 +218,8 @@ async def call_llm(
         }
         if tools:
             payload["tools"] = tools
+        if response_format is not None:
+            payload["response_format"] = response_format
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:

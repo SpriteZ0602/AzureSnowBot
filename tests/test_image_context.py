@@ -1,0 +1,283 @@
+"""按需图片描述、跨轮复用、原子替换及真实群 handler 的集成测试。"""
+
+import copy
+import importlib.util
+import json
+import sys
+import types
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+sys.modules.setdefault("nonebot", MagicMock())
+sys.modules.setdefault("nonebot.log", MagicMock(logger=MagicMock()))
+
+from plugins import image_context as images, message_store as store
+from plugins.history_io import append_jsonl_message, clear_jsonl_history, load_jsonl_history, rewrite_compacted_history
+from plugins.message_parser import ImageRef, MessageResolver, image_marker, resolve_quoted_message
+
+ROOT = Path(__file__).resolve().parents[1]
+IID = "img_" + "a" * 20
+
+
+@pytest.fixture(autouse=True)
+def isolated_storage(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "chatlog.db")
+
+
+def note(iid=IID, value="ABC-731"):
+    return {"image_id": iid, "description": "白底编号截图", "visible_text": value, "uncertain": "底部小字模糊"}
+
+
+def test_decode_validates_identity_types_and_limits():
+    good = note()
+    good["description"] = "画" * 1000
+    good["visible_text"] = "字" * 5000
+    raw = json.dumps({"reply": "正常回复", "image_notes": [
+        {**note(), "image_id": ["bad"]}, note("other"), {**note(), "visible_text": []}, good, note(),
+    ]})
+    reply, notes = images.decode_visual_response(raw, [ImageRef(IID, "https://x/image")])
+    assert reply == "正常回复" and len(notes) == 1
+    assert len(notes[0]["description"]) <= 300 and len(notes[0]["visible_text"]) <= 1000
+    assert "已截断" in notes[0]["visible_text"]
+
+
+@pytest.mark.parametrize("raw", ['{"reply":', "", "[]", "null", '{"reply":42,"image_notes":{}}'])
+def test_invalid_json_is_not_forwarded_as_a_reply(raw):
+    assert images.decode_visual_response(raw, [ImageRef(IID, "https://x/image")]) == ("", [])
+
+
+def test_atomic_replacement_preserves_new_messages_and_other_images(tmp_path):
+    path = tmp_path / "history.jsonl"
+    other = image_marker("img_" + "b" * 20)
+    snapshot = [{"role": "user", "content": "Alice:文字" + image_marker(IID) + other}]
+    append_jsonl_message(path, snapshot[0])
+    append_jsonl_message(path, {"role": "user", "content": "期间新消息"})
+    images.apply_image_notes("123", "cat", [note()], session_path=path)
+    loaded = load_jsonl_history(path)
+    assert "ABC-731" in loaded[0]["content"] and other in loaded[0]["content"]
+    assert "Alice:文字" in loaded[0]["content"]
+    assert loaded[-1]["content"] == "期间新消息"
+    # 旧 compact 快照必须放弃覆盖已更新的图片描述。
+    assert rewrite_compacted_history(path, snapshot, [{"role": "assistant", "content": "旧摘要"}]) is None
+    assert all(set(msg) == {"role", "content"} for msg in loaded)
+
+
+def test_replacement_operates_on_latest_compacted_history(tmp_path):
+    path = tmp_path / "history.jsonl"
+    snapshot = [{"role": "user", "content": "旧聊天"}, {"role": "user", "content": image_marker(IID)}]
+    for msg in snapshot:
+        append_jsonl_message(path, msg)
+    rewrite_compacted_history(path, snapshot, [{"role": "assistant", "content": "摘要"}, snapshot[-1]])
+    images.apply_image_notes("123", "cat", [note()], session_path=path)
+    loaded = load_jsonl_history(path)
+    assert loaded[0]["content"] == "摘要" and "ABC-731" in loaded[-1]["content"]
+
+
+def test_reset_is_not_undone_and_personas_are_not_modified(tmp_path):
+    path, other = tmp_path / "cat.jsonl", tmp_path / "other.jsonl"
+    for target in (path, other):
+        append_jsonl_message(target, {"role": "user", "content": image_marker(IID)})
+    clear_jsonl_history(path)
+    images.apply_image_notes("123", "cat", [note()], session_path=path)
+    assert not path.exists()
+    assert load_jsonl_history(other)[0]["content"] == image_marker(IID)
+    assert images.cached_note("456", IID) is None
+
+
+async def test_same_image_reuses_note_even_if_signed_url_changes(tmp_path):
+    bot = MagicMock()
+    raw = [{"type": "image", "data": {"file": "stable-image", "url": "https://x/img?token=old"}}]
+    first = await MessageResolver(bot, "123").resolve(raw, origin="qq:77")
+    iid = first.images[0].image_id
+    images.apply_image_notes("123", "cat", [note(iid)], session_path=tmp_path / "absent.jsonl")
+    raw[0]["data"]["url"] = "https://x/img?token=new"
+    second = await MessageResolver(bot, "123").resolve(raw, origin="qq:77")
+    assert second.images[0].image_id == iid
+    assert "ABC-731" in second.text and "尚未识别" not in second.text
+    assert store.get_context("123", f"image:{iid}")["url"].endswith("new")
+    assert not list(tmp_path.rglob("*.png")) and not list(tmp_path.rglob("*.jpg"))
+
+
+async def test_explicit_refresh_fetches_fresh_qq_message():
+    reply = types.SimpleNamespace(message=[{"type": "text", "data": {"text": "旧内容"}}], sender={})
+    bot = MagicMock(get_msg=AsyncMock(return_value={"sender": {"nickname": "A"}, "message": "新内容"}))
+    value = await resolve_quoted_message(bot, "123", 77, reply=reply, refresh=True)
+    assert value.text == "新内容"
+    bot.get_msg.assert_awaited_once_with(message_id=77)
+
+
+async def test_image_identity_survives_nonebot_at_segment_removal():
+    bot = MagicMock(get_group_member_info=AsyncMock(return_value={"nickname": "Bot"}))
+    pic = {"type": "image", "data": {"file": "stable", "url": "https://x/image"}}
+    raw = [{"type": "at", "data": {"qq": "10000"}}, pic]
+    original = await MessageResolver(bot, "123", "10000").resolve(raw, origin="qq:77")
+    processed = await MessageResolver(bot, "123", "10000").resolve([pic], origin="qq:77")
+    assert original.images[0].image_id == processed.images[0].image_id
+
+
+def test_explicit_reread_updates_previous_description(tmp_path):
+    path = tmp_path / "history.jsonl"
+    append_jsonl_message(path, {"role": "user", "content": image_marker(IID)})
+    images.apply_image_notes("123", "cat", [note()], session_path=path)
+    images.apply_image_notes("123", "cat", [note(value="DEF-999")], session_path=path)
+    content = load_jsonl_history(path)[0]["content"]
+    assert "DEF-999" in content and "ABC-731" not in content
+
+
+def test_original_chatlog_is_updated_only_in_same_group(tmp_path):
+    import sqlite3
+    with sqlite3.connect(store.DB_PATH) as conn:
+        conn.execute("CREATE TABLE messages(group_id TEXT, text TEXT)")
+        conn.executemany("INSERT INTO messages VALUES (?,?)", [(gid, image_marker(IID)) for gid in ("123", "456")])
+    images.apply_image_notes("123", "cat", [note()], session_path=tmp_path / "absent.jsonl")
+    with sqlite3.connect(store.DB_PATH) as conn:
+        rows = dict(conn.execute("SELECT group_id,text FROM messages"))
+    assert "ABC-731" in rows["123"] and rows["456"] == image_marker(IID)
+
+
+@pytest.fixture
+def group_handler(tmp_path, monkeypatch):
+    """加载真实 handler，仅替换外部服务和 NoneBot 生命周期。"""
+    bot = types.SimpleNamespace(get_msg=AsyncMock())
+    matcher = types.SimpleNamespace(handle=lambda: lambda fn: fn, finish=AsyncMock())
+    sent = AsyncMock()
+    llm = AsyncMock()
+    def module(name, **attributes):
+        value = types.ModuleType(name)
+        value.__dict__.update(attributes)
+        monkeypatch.setitem(sys.modules, name, value)
+        return value
+    module("nonebot", on_message=lambda **kw: matcher, get_bot=lambda: bot)
+    module("nonebot.adapters")
+    module("nonebot.adapters.onebot")
+    module("nonebot.adapters.onebot.v11", GroupMessageEvent=type("GroupMessageEvent", (), {}), MessageSegment=MagicMock())
+    for package in ("group", "persona", "chat", "mcp", "skill", "local_tools"):
+        if f"plugins.{package}" not in sys.modules:
+            module(f"plugins.{package}", __path__=[str(ROOT / "plugins" / package)])
+    module("nonebot.exception", FinishedException=type("FinishedException", (Exception,), {}))
+    module("plugins.chunker", chunk_text=lambda text: [text], send_chunked=sent)
+    module("plugins.runtime_context", build_runtime_context=lambda **kw: "静态运行环境", build_time_context=lambda *a: "动态时间")
+    path = lambda gid, persona: tmp_path / gid / f"{persona}.jsonl"
+    manager = module("plugins.persona.manager", get_active_persona=lambda gid: "cat",
+                     load_persona_prompt=lambda *a: "人格提示", load_history=lambda gid, p: load_jsonl_history(path(gid, p)),
+                     append_message=lambda gid, msg, p: append_jsonl_message(path(gid, p), msg),
+                     get_group_config=lambda gid: {}, get_listen_all=lambda gid: False,
+                     get_group_proactive=lambda gid: False, load_group_memory=lambda gid: "",
+                     group_memory_path=lambda gid: tmp_path / gid / "MEMORY.md", _session_path=path)
+    module("plugins.llm", API_KEY="test-key", BASE_URL="https://test.invalid", MODEL="deepseek-flash", SUPPORTS_VISION=True, call_llm=llm)
+    module("plugins.proactive", reset_idle_timer=lambda *a: None)
+    module("plugins.mcp.manager", get_openai_tools=lambda: [], call_tool=AsyncMock(), MAX_TOOL_ROUNDS=2)
+    module("plugins.skill.manager", build_catalog_prompt=lambda **kw: "", get_openai_tools=lambda: [], handle_tool_call=lambda *a: None)
+    module("plugins.local_tools.manager", get_openai_tools=lambda **kw: [], handle_tool_call=AsyncMock(return_value="正位 太阳"), _registry={})
+    module("plugins.tool_log", log_tool_call=lambda *a, **kw: None)
+    module("plugins.chat.compaction", should_compact=lambda h: False, compact_history=AsyncMock())
+    module("plugins.group.chatter", note_bot_reply=lambda gid: None)
+    module("plugins.group.utils", in_whitelist=lambda gid: True, is_at_bot=lambda e: True,
+           extract_text=AsyncMock(), is_group_event=lambda e: True,
+           get_reply_id=lambda e: e.reply_id, trim_history=lambda h, p: h, get_session_lock=MagicMock())
+    name = "plugins.group.handler_image_test"
+    spec = importlib.util.spec_from_file_location(name, ROOT / "plugins/group/handler.py")
+    handler = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, handler)
+    spec.loader.exec_module(handler)
+    raw = [{"type": "image", "data": {"file": "stable", "url": "https://x/image"}}]
+    event = types.SimpleNamespace(self_id=10000, user_id=5, message_id=88, reply_id=77,
+                                 message=[{"type": "text", "data": {"text": "看图"}}],
+                                 reply=types.SimpleNamespace(message=raw, sender={"nickname": "Alice"}),
+                                 sender=types.SimpleNamespace(nickname="Bob"))
+    return handler, event, llm, sent, manager, path
+
+
+async def test_real_handler_same_response_then_followup_without_image(group_handler):
+    handler, event, llm, sent, manager, path = group_handler
+    calls = []
+    async def answer(messages, **kwargs):
+        snapshot = copy.deepcopy(messages)
+        calls.append((snapshot, kwargs))
+        if len(calls) == 1:
+            user = next(m["content"] for m in messages if isinstance(m.get("content"), list))
+            iid = next(piece["text"].split("：", 1)[1] for piece in user if piece.get("type") == "text" and piece["text"].startswith("图片标识："))
+            output = json.dumps({"reply": "图中编号是 ABC-731", "image_notes": [note(iid)]})
+        else:
+            assert "ABC-731" in str(messages)
+            assert not any(isinstance(m.get("content"), list) for m in messages)
+            assert "response_format" not in kwargs
+            output = "刚才图片的编号是 ABC-731"
+        return {"choices": [{"message": {"content": output}}]}
+    llm.side_effect = answer
+    await handler._handle_group_chat(event, "123", "cat", "这张图写了什么？")
+    saved = load_jsonl_history(path("123", "cat"))
+    assert "ABC-731" in saved[0]["content"] and "尚未识别" not in saved[0]["content"]
+    assert all("https://x/image" not in msg["content"] for msg in saved)
+    assert calls[0][1]["response_format"] == {"type": "json_object"}
+    assert "动态时间" not in calls[0][0][0]["content"]
+    event.reply_id, event.reply = None, None
+    await handler._handle_group_chat(event, "123", "cat", "刚才的编号是什么？")
+    assert llm.await_count == 2 and sent.await_count == 2
+    assert sent.await_args_list[0].args[2] == ["图中编号是 ABC-731"]
+
+
+async def test_real_handler_tool_round_does_not_send_raw_json(group_handler):
+    handler, event, llm, sent, manager, path = group_handler
+    count = 0
+    async def answer(messages, **kwargs):
+        nonlocal count
+        count += 1
+        if count == 1:
+            return {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call1", "type": "function", "function": {"name": "local__tarot", "arguments": "{}"}}
+            ]}}]}
+        assert kwargs["response_format"] == {"type": "json_object"}
+        assert any(m["role"] == "tool" for m in messages)
+        user = next(m["content"] for m in messages if isinstance(m.get("content"), list))
+        iid = next(p["text"].split("：", 1)[1] for p in user if p.get("type") == "text" and p["text"].startswith("图片标识："))
+        return {"choices": [{"message": {"content": json.dumps({"reply": "看过图片，也确实抽了正位太阳", "image_notes": [note(iid)]})}}]}
+    llm.side_effect = answer
+    await handler._handle_group_chat(event, "123", "cat", "看图然后抽牌")
+    assert sent.await_count == 1, handler.logger.error.call_args
+    assert "image_notes" not in sent.await_args.args[2][0]
+    saved = load_jsonl_history(path("123", "cat"))
+    assert any("【执行记录" in m["content"] and "正位 太阳" in m["content"] for m in saved)
+    assert "ABC-731" in saved[0]["content"]
+
+
+async def test_real_handler_invalid_json_keeps_placeholder(group_handler):
+    handler, event, llm, sent, manager, path = group_handler
+    llm.return_value = {"choices": [{"message": {"content": '{"reply":'}}]}
+    await handler._handle_group_chat(event, "123", "cat", "看图")
+    assert sent.await_args.args[2] == [images.FAILURE_REPLY]
+    assert "尚未识别" in load_jsonl_history(path("123", "cat"))[0]["content"]
+
+
+async def test_real_handler_repeated_quote_does_not_resend_image(group_handler):
+    handler, event, llm, sent, manager, path = group_handler
+    quoted = await MessageResolver(MagicMock(), "123").resolve(event.reply.message, origin="qq:77")
+    iid = quoted.images[0].image_id
+    images.apply_image_notes("123", "cat", [note(iid)], session_path=path("123", "cat"))
+    async def answer(messages, **kwargs):
+        assert "response_format" not in kwargs
+        assert not any(isinstance(m.get("content"), list) for m in messages)
+        assert "ABC-731" in str(messages)
+        return {"choices": [{"message": {"content": "已有识别结果是 ABC-731"}}]}
+    llm.side_effect = answer
+    await handler._handle_group_chat(event, "123", "cat", "还是这张图")
+    assert llm.await_count == 1
+
+
+async def test_multimodal_input_is_not_lost_when_listen_appends_a_message(group_handler, monkeypatch):
+    handler, event, llm, sent, manager, path = group_handler
+    original = manager.append_message
+    def append_with_concurrent_message(gid, msg, persona):
+        original(gid, msg, persona)
+        if msg["role"] == "user":
+            original(gid, {"role": "user", "content": "[另一个群友]: 并发新消息"}, persona)
+    monkeypatch.setattr(handler, "append_message", append_with_concurrent_message)
+    async def answer(messages, **kwargs):
+        assert any(isinstance(m.get("content"), list) for m in messages)
+        assert any(m.get("content") == "[另一个群友]: 并发新消息" for m in messages)
+        return {"choices": [{"message": {"content": json.dumps({"reply": "看到图片了", "image_notes": []})}}]}
+    llm.side_effect = answer
+    await handler._handle_group_chat(event, "123", "cat", "看图")
+    assert sent.await_args.args[2] == ["看到图片了"]
