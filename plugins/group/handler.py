@@ -100,10 +100,12 @@ async def _handle_group_chat(
     reply_id = get_reply_id(event)
     if reply_id:
         bot = get_bot()
-        quoted_author, quoted_text = await fetch_quoted_text(bot, reply_id)
-        # 仅当模型支持多模态时才抓取引用图片（deepseek 等不支持，省一次 API 调用）
+        from ..message_parser import resolve_quoted_message
+        quoted = await resolve_quoted_message(bot, group_id, reply_id,
+                                              self_id=str(event.self_id), reply=event.reply)
+        quoted_author, quoted_text = quoted.author, quoted.text
         if SUPPORTS_VISION:
-            quoted_image_urls = await fetch_quoted_image_urls(bot, reply_id)
+            quoted_image_urls = [image.url for image in quoted.images]
 
     sender = event.sender.nickname or str(event.user_id)
 

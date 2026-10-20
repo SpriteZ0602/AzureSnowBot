@@ -18,6 +18,9 @@ import re
 import asyncio
 import random
 from collections import defaultdict
+from dataclasses import dataclass
+
+import httpx
 
 from nonebot.adapters.onebot.v11 import Bot, MessageSegment, Message
 from nonebot.log import logger
@@ -151,21 +154,48 @@ def build_forward_nodes(
     ]
 
 
+@dataclass(frozen=True)
+class SendResult:
+    status: str  # sent / failed / unknown
+    message_ids: tuple[int, ...] = ()
+
+
+def _delivery_error(exc: Exception) -> SendResult:
+    unknown = isinstance(exc, (TimeoutError, ConnectionError, OSError, httpx.TransportError)) or type(exc).__name__ == "NetworkError"
+    status = "unknown" if unknown else "failed"
+    logger.warning(f"消息发送状态={status}: {type(exc).__name__}")
+    return SendResult(status)
+
+
+def _remember_delivery(chat_type: str, target_id: int, response, text: str, author: str) -> tuple[int, ...]:
+    response = response if isinstance(response, dict) else {}
+    mid = response.get("message_id")
+    ids = (int(mid),) if isinstance(mid, (int, str)) and str(mid).lstrip("-").isdigit() else ()
+    if chat_type == "group":
+        try:
+            from .message_store import remember_sent_message
+            remember_sent_message(str(target_id), response, text, author)
+        except Exception as exc:
+            # 发送已经成功，保存索引失败绝不能引发重发。
+            logger.warning(f"保存发送消息关联失败: {type(exc).__name__}")
+    return ids
+
+
 async def send_forward(
     bot: Bot,
     chat_type: str,
     target_id: int,
     chunks: list[str],
-) -> bool:
+) -> SendResult:
     """用合并转发一次性发送所有分段。
 
-    返回 True 表示发送成功；False 表示失败（调用方应回退到逐条发送）。
+    返回发送状态和 QQ 消息 ID；超时视为 unknown，禁止盲目重发。
 
     注意：合并转发是 go-cqhttp 扩展 API，不在 OneBot v11 标准里。
     如果实现端不支持会抛异常，这里捕获并返回 False，不影响主流程。
     """
     if not chunks:
-        return True
+        return SendResult("sent")
 
     nickname = await _get_self_nickname(bot)
     nodes = build_forward_nodes(
@@ -174,17 +204,17 @@ async def send_forward(
 
     try:
         if chat_type == "group":
-            await bot.call_api(
+            response = await bot.call_api(
                 "send_group_forward_msg", group_id=target_id, messages=nodes,
             )
         else:
-            await bot.call_api(
+            response = await bot.call_api(
                 "send_private_forward_msg", user_id=target_id, messages=nodes,
             )
-        return True
     except Exception as e:
-        logger.warning(f"合并转发发送失败，回退逐条发送: {e}")
-        return False
+        return _delivery_error(e)
+    ids = _remember_delivery(chat_type, target_id, response, "\n".join(chunks), nickname)
+    return SendResult("sent", ids)
 
 
 # ──────────────────── 分条发送 ────────────────────
@@ -195,7 +225,7 @@ async def send_chunked(
     chunks: list[str],
     *,
     reply_first: bool = True,
-) -> None:
+) -> SendResult:
     """
     分条发送消息列表，每条之间加随机延迟。
 
@@ -207,7 +237,7 @@ async def send_chunked(
                      走合并转发，此时引用会被丢弃 —— 聊天记录无法带引用）
     """
     if not chunks:
-        return
+        return SendResult("sent")
 
     key = _session_key(event)
 
@@ -219,9 +249,11 @@ async def send_chunked(
 
         # 分段太多时合并成一条「聊天记录」，避免刷屏
         if len(chunks) >= FORWARD_THRESHOLD:
-            if await send_forward(bot, chat_type, target_id, chunks):
-                return
+            forwarded = await send_forward(bot, chat_type, target_id, chunks)
+            if forwarded.status != "failed":
+                return forwarded
 
+        message_ids = []
         for i, chunk in enumerate(chunks):
             # 第一条引用原消息
             if i == 0 and reply_first and hasattr(event, "message_id"):
@@ -229,15 +261,21 @@ async def send_chunked(
             else:
                 msg = Message(chunk)
 
-            if group_id:
-                await bot.send_group_msg(group_id=group_id, message=msg)
-            else:
-                await bot.send_private_msg(user_id=event.user_id, message=msg)
+            try:
+                if group_id:
+                    response = await bot.send_group_msg(group_id=group_id, message=msg)
+                else:
+                    response = await bot.send_private_msg(user_id=event.user_id, message=msg)
+            except Exception as exc:
+                failure = _delivery_error(exc)
+                return SendResult(failure.status, tuple(message_ids))
+            message_ids.extend(_remember_delivery(chat_type, target_id, response, chunk, _self_nickname or "Bot"))
 
             # 非最后一条，加随机延迟
             if i < len(chunks) - 1:
                 delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX)
                 await asyncio.sleep(delay)
+        return SendResult("sent", tuple(message_ids))
 
 
 async def send_chunked_raw(
@@ -245,7 +283,7 @@ async def send_chunked_raw(
     chat_type: str,
     target_id: int,
     text: str,
-) -> None:
+) -> SendResult:
     """
     无需 event 对象的分条发送。供提醒等主动推送场景使用。
 
@@ -259,23 +297,31 @@ async def send_chunked_raw(
     """
     chunks = chunk_text(text)
     if not chunks:
-        return
+        return SendResult("sent")
 
     key = f"{'g' if chat_type == 'group' else 'u'}:{target_id}"
 
     async with _session_locks[key]:
         if len(chunks) >= FORWARD_THRESHOLD:
-            if await send_forward(bot, chat_type, target_id, chunks):
-                return
+            forwarded = await send_forward(bot, chat_type, target_id, chunks)
+            if forwarded.status != "failed":
+                return forwarded
 
+        message_ids = []
         for i, chunk in enumerate(chunks):
             msg = Message(chunk)
 
-            if chat_type == "group":
-                await bot.send_group_msg(group_id=target_id, message=msg)
-            else:
-                await bot.send_private_msg(user_id=target_id, message=msg)
+            try:
+                if chat_type == "group":
+                    response = await bot.send_group_msg(group_id=target_id, message=msg)
+                else:
+                    response = await bot.send_private_msg(user_id=target_id, message=msg)
+            except Exception as exc:
+                failure = _delivery_error(exc)
+                return SendResult(failure.status, tuple(message_ids))
+            message_ids.extend(_remember_delivery(chat_type, target_id, response, chunk, _self_nickname or "Bot"))
 
             if i < len(chunks) - 1:
                 delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX)
                 await asyncio.sleep(delay)
+        return SendResult("sent", tuple(message_ids))

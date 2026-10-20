@@ -132,6 +132,16 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 - Compaction 必须保留仍相关的执行事实和结果，不能把口头承诺总结成已执行。
 
 ### 消息分条发送（Chunker）
+发送函数返回 `SendResult(status, message_ids)`，`status` 为 `sent/failed/unknown`。
+合并转发明确失败才回退逐条发送；超时等状态不明时不重发。群消息发送成功后把 QQ 消息 ID 与文字关联存入现有 chatlog SQLite。
+
+### 群消息解析与引用
+
+- `plugins/message_parser.py` 统一解析文字、@、图片占位、合并转发（含 CQ 字符串、NapCat/标准节点）；引用 Bot 消息优先查本地发送关联。
+- 合并转发最多 3 层、100 节点、4 张图片、50000 字符；预览 6000 字符，`local__read_message_content` 按本群分页读取余下文字。
+- `plugins/message_store.py` 在 `chatlog.db` 的独立表保存引用与有限文本；转发缓存 24 小时，其他引用最长 365 天，总文本预算 50 MiB；不保存图片二进制。
+
+### 消息发送接口
 `plugins/chunker.py` 提供两个发送函数：
 - `send_chunked(bot, event, chunks)` — 需要 event 对象，用于普通回复
 - `send_chunked_raw(bot, chat_type, target_id, text)` — 不需要 event，用于主动推送（提醒 / 主动发言）

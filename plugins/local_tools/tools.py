@@ -1329,7 +1329,38 @@ async def web_search_tool(query: str = "", num_results: int = 5, auto_read: bool
 
 
 # ──────────────────────────────────────────────────────
-# 记忆语义搜索工具（仅 Admin 私聊）
+# 合并转发详情（群聊内分页读取）
+# ──────────────────────────────────────────────────────
+
+@register_tool(
+    name="read_message_content",
+    description="读取本群合并转发或 Bot 消息的更多文字。引用预览被截断时，使用其中的 reference 和 offset 分页读取。",
+    parameters={"type": "object", "properties": {
+        "reference": {"type": "string", "description": "预览提供的引用标识，例如 forward:xxx 或 qq:123"},
+        "offset": {"type": "integer", "description": "起始字符位置，默认 0"},
+        "limit": {"type": "integer", "description": "本次字符数，默认 3000，最多 6000"},
+    }, "required": ["reference"]},
+)
+async def read_message_content(reference: str = "", offset: int = 0, limit: int = 3000,
+                               _context: dict | None = None, **kwargs) -> str:
+    from ..message_store import get_context
+    if not _context or _context.get("_chat_type") != "group":
+        return "[错误] 此工具仅限群聊使用"
+    try:
+        offset, limit = max(0, int(offset)), max(1, min(6000, int(limit)))
+        payload = get_context(str(_context.get("_target_id", "")), reference)
+    except (ValueError, TypeError):
+        return "[错误] offset 和 limit 必须为整数"
+    if not payload or "text" not in payload:
+        return "[错误] 本群没有这条引用记录，或内容已经过期"
+    text = payload["text"]
+    end = min(len(text), offset + limit)
+    return f"引用 {reference}，字符 {offset}:{end}/{len(text)}\n{text[offset:end]}" + (
+        f"\n[还有内容，下一页 offset={end}]" if end < len(text) else "\n[内容结束]")
+
+
+# ──────────────────────────────────────────────────────
+# 记忆语义搜索工具
 # ──────────────────────────────────────────────────────
 
 @register_tool(

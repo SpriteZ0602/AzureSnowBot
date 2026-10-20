@@ -122,13 +122,15 @@ class TestExtractText:
         ev = _Event([_Seg("at", qq="12345")])
         assert await extract_text(_Bot(members={"12345": ""}), ev) == "@12345"
 
-    async def test_ignores_image_and_reply_segments(self):
+    async def test_preserves_image_placeholder_and_ignores_reply_segment(self):
         ev = _Event([
             _Seg("reply", id="5"),
             _Seg("text", text="看这个"),
             _Seg("image", url="http://x/img.jpg"),
         ])
-        assert await extract_text(_Bot(), ev) == "看这个"
+        text = await extract_text(_Bot(), ev)
+        assert text.startswith("看这个[图片 img_") and "尚未识别" in text
+        assert "http://x" not in text
 
 
 # ──────────────────── fetch_quoted_text：引用作者 ────────────────────
@@ -144,7 +146,7 @@ class TestFetchQuotedText:
         })
         author, text = await fetch_quoted_text(bot, 1)
         assert author == "大明"
-        assert text == "今天吃火锅"
+        assert text.startswith("今天吃火锅[图片 img_")
 
     async def test_raw_string_message(self):
         bot = _MsgBot({"sender": {"nickname": "小明"}, "message": "纯字符串消息"})

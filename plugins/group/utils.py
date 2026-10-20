@@ -88,13 +88,10 @@ async def extract_text(bot: Bot, event: GroupMessageEvent) -> str:
     这里逐段拼接：@Bot 渲染为 @Bot，@ 他人查一次群成员 API 取昵称
     （查不到时退化为 @qq号），uid 一并给出供检索工具精确匹配。
     """
-    parts: list[str] = []
-    for seg in event.message:
-        if seg.type == "text":
-            parts.append(seg.data.get("text", ""))
-        elif seg.type == "at":
-            parts.append(await _render_at(bot, event, seg))
-    return "".join(parts).strip()
+    from ..message_parser import MessageResolver
+    resolved = await MessageResolver(bot, str(event.group_id), str(event.self_id)).resolve(
+        event.message, origin=f"qq:{getattr(event, 'message_id', '')}")
+    return resolved.text
 
 
 async def _render_at(bot: Bot, event: GroupMessageEvent, seg) -> str:
@@ -131,25 +128,11 @@ async def fetch_quoted_text(bot: Bot, message_id: int) -> tuple[str, str]:
     群聊里"他说得对吗"这类提问依赖引用消息的作者，只带文字不带人
     LLM 无法解析"他"指谁。获取失败时返回 ("", "")。
     """
-    try:
-        msg_data = await bot.get_msg(message_id=message_id)
-        sender = msg_data.get("sender") or {}
-        author = sender.get("nickname") or "某人"
-        raw_msg = msg_data.get("message", "")
-        if isinstance(raw_msg, str):
-            text = raw_msg.strip()
-        elif isinstance(raw_msg, list):
-            parts = []
-            for seg in raw_msg:
-                if isinstance(seg, dict) and seg.get("type") == "text":
-                    parts.append(seg.get("data", {}).get("text", ""))
-            text = "".join(parts).strip()
-        else:
-            text = str(raw_msg).strip()
-        return (author, text)
-    except Exception as e:
-        logger.warning(f"获取引用消息失败: {e}")
+    from ..message_parser import resolve_quoted_message
+    resolved = await resolve_quoted_message(bot, "", message_id)
+    if resolved.text == "[引用消息读取失败或已过期]":
         return ("", "")
+    return resolved.author, resolved.text
 
 
 async def fetch_quoted_image_urls(bot: Bot, message_id: int) -> list[str]:

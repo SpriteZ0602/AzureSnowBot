@@ -221,7 +221,9 @@ def _fake_bot(nickname="测试Bot", self_id="10001", fail_forward=False):
 
 
 @_pytest.fixture(autouse=True)
-def _reset_cache():
+def _reset_cache(tmp_path, monkeypatch):
+    from plugins import message_store
+    monkeypatch.setattr(message_store, "DB_PATH", tmp_path / "chatlog.db")
     reset_self_nickname_cache()
     yield
     reset_self_nickname_cache()
@@ -258,7 +260,7 @@ class TestSendForward:
     def test_group_uses_group_api(self):
         bot = _fake_bot()
         ok = _asyncio.run(send_forward(bot, "group", 777, ["a", "b", "c"]))
-        assert ok is True
+        assert ok.status == "sent"
         api, kwargs = bot.calls[-1]
         assert api == "send_group_forward_msg"
         assert kwargs["group_id"] == 777
@@ -267,7 +269,7 @@ class TestSendForward:
     def test_private_uses_private_api(self):
         bot = _fake_bot()
         ok = _asyncio.run(send_forward(bot, "private", 555, ["a", "b"]))
-        assert ok is True
+        assert ok.status == "sent"
         api, kwargs = bot.calls[-1]
         assert api == "send_private_forward_msg"
         assert kwargs["user_id"] == 555
@@ -289,12 +291,12 @@ class TestSendForward:
     def test_failure_returns_false(self):
         """扩展 API 不被支持时应返回 False，由调用方回退"""
         bot = _fake_bot(fail_forward=True)
-        assert _asyncio.run(send_forward(bot, "group", 1, ["a", "b", "c"])) is False
+        assert _asyncio.run(send_forward(bot, "group", 1, ["a", "b", "c"])).status == "failed"
         bot.send_group_msg.assert_not_awaited()
 
     def test_empty_chunks_no_call(self):
         bot = _fake_bot()
-        assert _asyncio.run(send_forward(bot, "group", 1, [])) is True
+        assert _asyncio.run(send_forward(bot, "group", 1, [])).status == "sent"
         assert not bot.calls
 
 
@@ -399,7 +401,9 @@ def _fake_bot(nickname="测试Bot", self_id="10001", fail_forward=False):
 
 
 @_pytest.fixture(autouse=True)
-def _reset_cache():
+def _reset_cache(tmp_path, monkeypatch):
+    from plugins import message_store
+    monkeypatch.setattr(message_store, "DB_PATH", tmp_path / "chatlog.db")
     reset_self_nickname_cache()
     yield
     reset_self_nickname_cache()
@@ -436,7 +440,7 @@ class TestSendForward:
     def test_group_uses_group_api(self):
         bot = _fake_bot()
         ok = _asyncio.run(send_forward(bot, "group", 777, ["a", "b", "c"]))
-        assert ok is True
+        assert ok.status == "sent"
         api, kwargs = bot.calls[-1]
         assert api == "send_group_forward_msg"
         assert kwargs["group_id"] == 777
@@ -445,7 +449,7 @@ class TestSendForward:
     def test_private_uses_private_api(self):
         bot = _fake_bot()
         ok = _asyncio.run(send_forward(bot, "private", 555, ["a", "b"]))
-        assert ok is True
+        assert ok.status == "sent"
         api, kwargs = bot.calls[-1]
         assert api == "send_private_forward_msg"
         assert kwargs["user_id"] == 555
@@ -467,12 +471,12 @@ class TestSendForward:
     def test_failure_returns_false(self):
         """扩展 API 不被支持时应返回 False，由调用方回退"""
         bot = _fake_bot(fail_forward=True)
-        assert _asyncio.run(send_forward(bot, "group", 1, ["a", "b", "c"])) is False
+        assert _asyncio.run(send_forward(bot, "group", 1, ["a", "b", "c"])).status == "failed"
         bot.send_group_msg.assert_not_awaited()
 
     def test_empty_chunks_no_call(self):
         bot = _fake_bot()
-        assert _asyncio.run(send_forward(bot, "group", 1, [])) is True
+        assert _asyncio.run(send_forward(bot, "group", 1, [])).status == "sent"
         assert not bot.calls
 
 
@@ -533,3 +537,41 @@ class TestThresholdRouting:
         _asyncio.run(send_chunked(bot, self._event(group_id=7), []))
         assert bot.send_group_msg.await_count == 0
         assert not bot.calls
+
+
+class TestDeliveryRecords:
+    def test_confirmed_forward_is_available_for_later_quote(self):
+        from plugins import message_store
+        bot = _fake_bot()
+        result = _asyncio.run(send_forward(bot, "group", 777, ["a", "b", "c"]))
+        assert result.message_ids == (1,)
+        assert message_store.get_context("777", "qq:1")["text"] == "a\nb\nc"
+
+    def test_timeout_does_not_fall_back_to_duplicate_messages(self):
+        bot = _fake_bot()
+        async def api(name, **kwargs):
+            if name == "get_login_info":
+                return {"nickname": "Bot"}
+            raise TimeoutError("response was lost")
+        bot.call_api.side_effect = api
+        result = _asyncio.run(send_chunked_raw(bot, "group", 777, "a\nb\nc"))
+        assert result.status == "unknown"
+        bot.send_group_msg.assert_not_awaited()
+
+    def test_index_failure_after_send_does_not_trigger_resend(self, monkeypatch):
+        from plugins import message_store
+        def broken(*args, **kwargs):
+            raise OSError("disk full")
+        monkeypatch.setattr(message_store, "remember_sent_message", broken)
+        bot = _fake_bot()
+        result = _asyncio.run(send_chunked_raw(bot, "group", 777, "a\nb\nc"))
+        assert result.status == "sent"
+        bot.send_group_msg.assert_not_awaited()
+
+    def test_plain_message_id_is_also_recorded(self):
+        from plugins import message_store
+        bot = _fake_bot()
+        bot.send_group_msg.return_value = {"message_id": 9}
+        result = _asyncio.run(send_chunked_raw(bot, "group", 777, "plain text"))
+        assert result.message_ids == (9,)
+        assert message_store.get_context("777", "qq:9")["text"] == "plain text"

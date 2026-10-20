@@ -30,6 +30,8 @@ async def _purge_expired_on_startup() -> None:
     """启动时清理一次超过保留期的旧记录（旧 JSONL 时代的 purge 从未被调度过）"""
     try:
         removed = purge_all_old_entries()
+        from ..message_store import cleanup_context
+        cleanup_context()
         if removed:
             logger.info(f"聊天记录清理: 删除 {removed} 条超过 {RETENTION_DAYS} 天的旧记录")
     except Exception as e:
@@ -46,7 +48,12 @@ async def _record_group_message(bot: Bot, event: GroupMessageEvent):
     if not in_whitelist(event.group_id):
         return
 
-    # @ 感知提取：@ 段转成 @昵称(qq号)，否则记录里丢失"点了谁"的信息
+    # 凭证指令先检查原文，避免解析附件时把 Token 相关内容持久化。
+    plaintext = event.get_plaintext().strip()
+    if plaintext.startswith(("/bind", "/unbind")):
+        return
+
+    # 通用提取保留 @、图片占位和合并转发内容。
     text = await extract_text(bot, event)
     if not text:
         return
