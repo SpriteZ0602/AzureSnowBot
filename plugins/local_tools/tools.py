@@ -1116,27 +1116,11 @@ async def maimai_song_search(song_name: str = "", **kwargs) -> str:
 
 
 # ──────────────────────────────────────────────────────
-# 网络搜索与网页读取工具
+# 网络搜索与网页读取工具（DeepSeek Search / Fetch API）
 # ──────────────────────────────────────────────────────
 
-# 通用浏览器 UA（Bing HTML 解析 / 直连抓取共用；裸 "Mozilla/5.0" 容易吃反爬）
-_BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
-
-
-def _strip_html(html: str) -> str:
-    """粗暴提取 HTML 纯文本（搜索摘要 / 直连抓取 fallback 用）"""
-    import re as _re
-    from html import unescape as _unescape
-
-    text = _re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", html)
-    text = _re.sub(r"(?s)<[^>]+>", " ", text)
-    text = _re.sub(r"&nbsp;?", " ", text)
-    text = _unescape(text)
-    text = _re.sub(r"\s+", " ", text)
-    return text.strip()
+_DEEPSEEK_SEARCH_PATH = "/tools/search"
+_DEEPSEEK_FETCH_PATH = "/tools/fetch"
 
 
 def _truncate(text: str, max_chars: int, url: str) -> str:
@@ -1145,61 +1129,100 @@ def _truncate(text: str, max_chars: int, url: str) -> str:
     return text
 
 
-# Jina Reader 对反爬站会返回 HTTP 200 的告警页（目标站 403 / Cloudflare
-# 挑战页），正文实际不可用。命中这些标记就当 Jina 失败，走直连 fallback。
-_JINA_FAILURE_MARKERS = ("target url returned error", "just a moment")
+def _deepseek_tools_config() -> tuple[str, str]:
+    """读取 DeepSeek Search/Fetch Tools API 的 (api_key, base_url)。"""
+    from ..llm import get_deepseek_tools_config
+
+    return get_deepseek_tools_config()
 
 
-def _jina_body_ok(text: str) -> bool:
-    lowered = text.lower()
-    return not any(marker in lowered for marker in _JINA_FAILURE_MARKERS)
+async def _deepseek_search(
+    query: str,
+    num_results: int,
+    *,
+    need_content: bool = False,
+) -> list[dict]:
+    """调用 DeepSeek 网页搜索 API，返回结构化结果列表。
 
-
-async def _fetch_page_text(url: str, max_chars: int = 6000) -> str:
-    """提取网页正文纯文本（web_read 与 web_search 聚合共用）。
-
-    Jina Reader 优先（正文提取质量好）；国内网络不可达时降级为直连抓取
-    并剥离 HTML 标签。失败返回错误提示字符串，供 LLM 直接理解。
+    每条结果包含 title / url / snippet / summary / content / site_name /
+    date / authority / rerank_score 等字段（见官方文档）。
     """
     import httpx as _httpx
 
-    # 1) Jina Reader
-    try:
-        async with _httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.get(
-                f"https://r.jina.ai/{url}",
-                headers={"Accept": "text/plain"},
-            )
-            resp.raise_for_status()
-            text = resp.text.strip()
-            # HTTP 200 不代表拿到正文——反爬站会返回告警页
-            if text and _jina_body_ok(text):
-                return _truncate(text, max_chars, url)
-    except Exception:
-        pass  # Jina 不可达/失败 → 直连 fallback
+    api_key, base_url = _deepseek_tools_config()
+    if not api_key:
+        raise RuntimeError("未配置 DeepSeek API Key（DEEPSEEK_API_KEY）")
 
-    # 2) 直连抓取（剥离 HTML 标签）
+    payload: dict = {
+        "query": query[:128],
+        "count": max(1, min(50, num_results)),
+    }
+    if need_content:
+        payload["need_content"] = True
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    async with _httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{base_url}{_DEEPSEEK_SEARCH_PATH}",
+            headers=headers,
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    results = data.get("results")
+    return results if isinstance(results, list) else []
+
+
+async def _deepseek_fetch(url: str, max_chars: int = 6000) -> str:
+    """调用 DeepSeek 网页抓取 API，返回 Markdown 正文。"""
+    import httpx as _httpx
+
+    api_key, base_url = _deepseek_tools_config()
+    if not api_key:
+        return "[错误] 未配置 DeepSeek API Key（DEEPSEEK_API_KEY）"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
     try:
-        async with _httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.get(
-                url,
-                headers={"User-Agent": _BROWSER_UA},
+        async with _httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{base_url}{_DEEPSEEK_FETCH_PATH}",
+                headers=headers,
+                json={"url": url},
             )
             resp.raise_for_status()
-            text = _strip_html(resp.text)
-            if not text:
-                return f"[错误] 页面内容为空: {url}"
-            return _truncate(text, max_chars, url)
+            data = resp.json()
+    except _httpx.HTTPStatusError as e:
+        logger.warning(f"DeepSeek 网页抓取失败: {e}")
+        return (
+            f"[错误] 网页抓取失败: HTTP {e.response.status_code} "
+            f"{e.response.text[:200]}"
+        )
     except Exception as e:
+        logger.warning(f"DeepSeek 网页抓取失败: {e}")
         return f"[错误] 读取网页失败: {e}"
+
+    title = (data.get("title") or "").strip()
+    content = (data.get("content") or "").strip()
+    if not content:
+        return f"[错误] 页面正文为空: {url}"
+
+    text = f"# {title}\n\n{content}" if title else content
+    return _truncate(text, max_chars, url)
 
 
 @register_tool(
     name="web_read",
     description=(
-        "读取指定网页的内容，返回可读的纯文本。"
-        "用途：查看某个链接的内容、阅读文章、获取网页信息。"
-        "使用 Jina Reader API 提取正文，无需浏览器。"
+        "读取指定网页的内容，返回 Markdown 格式的正文。"
+        "用途：查看某个链接的完整内容、阅读文章、获取网页信息。"
+        "使用 DeepSeek 网页抓取 API，自动过滤广告和导航。"
     ),
     parameters={
         "type": "object",
@@ -1215,87 +1238,15 @@ async def _fetch_page_text(url: str, max_chars: int = 6000) -> str:
 async def web_read_tool(url: str = "", **kwargs) -> str:
     if not url:
         return "[错误] 请提供 URL"
-    return await _fetch_page_text(url, max_chars=6000)
-
-
-async def _bing_search(query: str, num_results: int) -> list[dict]:
-    """Bing 网页版搜索（cn.bing.com 国内直连可达，免 API key）。
-
-    不要改回 format=rss：该端点已废弃，对多数查询返回随机无关结果
-    （实测「今天上海天气」返回州法院网站、「stackoverflow 怎么用」返回
-    西班牙聊天站），只有 python 这类高频词恰好正常。这里解析 HTML 版
-    的 li.b_algo 结果块。显式 cn.bing.com + mkt=zh-CN 固定中文市场
-    （不带 mkt 时会按出口 IP 漂移到 ja-jp 等垃圾本地化）；
-    trust_env=False 不读代理环境变量，国内服务器直连、结果稳定。
-    """
-    import re as _re2
-
-    import httpx as _h
-
-    async with _h.AsyncClient(timeout=15, follow_redirects=True, trust_env=False) as client:
-        resp = await client.get(
-            "https://cn.bing.com/search",
-            params={"q": query, "mkt": "zh-CN", "setlang": "zh-hans"},
-            headers={"User-Agent": _BROWSER_UA},
-        )
-        resp.raise_for_status()
-
-    results: list[dict] = []
-    for blk in _re2.findall(r'<li class="b_algo".*?</li>', resp.text, _re2.S):
-        m = _re2.search(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', blk, _re2.S)
-        if not m:
-            continue
-        title = _strip_html(m.group(2))
-        if not title:
-            continue
-        cap = _re2.search(r'<div class="b_caption"[^>]*>\s*<p[^>]*>(.*?)</p>', blk, _re2.S)
-        desc = _strip_html(cap.group(1)) if cap else ""
-        results.append({"title": title, "url": m.group(1), "desc": desc})
-        if len(results) >= num_results:
-            break
-    return results
-
-
-async def _ddg_search(query: str, num_results: int) -> list[dict]:
-    """DuckDuckGo HTML 搜索（免费，无需 API key）"""
-    import httpx as _h
-    import re as _re2
-
-    async with _h.AsyncClient(timeout=15, follow_redirects=True) as client:
-        resp = await client.get(
-            "https://html.duckduckgo.com/html/",
-            params={"q": query},
-            headers={"User-Agent": "Mozilla/5.0"},
-        )
-        resp.raise_for_status()
-        html = resp.text
-
-    results: list[dict] = []
-    result_blocks = _re2.findall(
-        r'class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
-        r'class="result__snippet"[^>]*>(.*?)</(?:a|span)',
-        html, _re2.DOTALL,
-    )
-    for href, raw_title, raw_desc in result_blocks[:num_results]:
-        title = _re2.sub(r"<[^>]+>", "", raw_title).strip()
-        desc = _re2.sub(r"<[^>]+>", "", raw_desc).strip()
-        # DuckDuckGo 的 href 是重定向 URL，提取真实 URL
-        url_match = _re2.search(r"uddg=([^&]+)", href)
-        if url_match:
-            from urllib.parse import unquote
-            url = unquote(url_match.group(1))
-        else:
-            url = href
-        results.append({"title": title, "url": url, "desc": desc})
-    return results
+    return await _deepseek_fetch(url, max_chars=6000)
 
 
 @register_tool(
     name="web_search",
     description=(
-        "搜索互联网获取实时信息，默认自动抓取前几个链接的正文摘要。"
+        "使用 DeepSeek 搜索互联网获取实时信息。"
+        "返回标题、URL、长摘要；默认同时返回前几个结果的高质量正文。"
         "当用户询问最新新闻、实时数据、或你不确定的事实时使用。"
-        "返回搜索结果的标题、URL、摘要，以及自动读取的页面正文。"
     ),
     parameters={
         "type": "object",
@@ -1310,60 +1261,62 @@ async def _ddg_search(query: str, num_results: int) -> list[dict]:
             },
             "auto_read": {
                 "type": "boolean",
-                "description": "是否自动抓取前几个链接的正文（默认 true）。只想看搜索结果列表时设为 false",
+                "description": "是否同时返回前几个结果的正文（默认 true）。只想看摘要列表时设为 false",
             },
         },
         "required": ["query"],
     },
 )
 async def web_search_tool(query: str = "", num_results: int = 5, auto_read: bool = True, **kwargs) -> str:
-    import httpx as _httpx
-
     if not query:
         return "[错误] 请提供搜索关键词"
 
     num_results = max(1, min(10, num_results))
 
-    # 多源搜索：Bing RSS 优先（国内可达），失败降级 DuckDuckGo
     try:
-        results = await _bing_search(query, num_results)
+        results = await _deepseek_search(
+            query, num_results, need_content=auto_read,
+        )
     except Exception as e:
-        logger.warning(f"Bing 搜索失败，降级 DuckDuckGo: {e}")
-        results = []
-
-    if not results:
-        try:
-            results = await _ddg_search(query, num_results)
-        except Exception as e:
-            return f"[错误] 搜索失败: {e}"
+        logger.warning(f"DeepSeek 搜索失败: {e}")
+        return f"[错误] 搜索失败: {e}"
 
     if not results:
         return f"未找到与「{query}」相关的搜索结果"
 
     lines: list[str] = []
     for i, item in enumerate(results, 1):
-        lines.append(f"{i}. {item['title']}\n   {item['url']}\n   {item['desc'][:200]}")
+        title = (item.get("title") or "").strip()
+        url = (item.get("url") or "").strip()
+        summary = (item.get("summary") or item.get("snippet") or "").strip()
+        # summary 可能长达上千字（接近正文），列表里只保留摘要；完整正文在下方
+        if len(summary) > 300:
+            summary = summary[:300] + "…"
+        site = (item.get("site_name") or "").strip()
+        date = (item.get("date") or "").strip()
+        meta_bits = [bit for bit in (site, date[:10] if date else "") if bit]
+        meta = f" [{' | '.join(meta_bits)}]" if meta_bits else ""
+        lines.append(f"{i}. {title}{meta}\n   {url}\n   {summary}")
 
     base = f"搜索结果（{query}，{len(results)} 条）:\n\n" + "\n\n".join(lines)
 
-    # 聚合：自动并发抓取前几个链接的正文，一个 tool result 返回。
-    # 相比让 LLM 逐轮 web_read，把 4-6 轮压缩到 2 轮（搜索 + 回答），
-    # 每轮重发上下文的 token 开销大幅下降。
     if not auto_read:
         return base
 
-    import asyncio as _asyncio
-
+    # DeepSeek 搜索接口在 need_content=true 时直接返回正文，
+    # 只展示前 3 条并截断，避免单次工具结果过大。
     read_limit = min(3, len(results))
-    pages = results[:read_limit]
-    fetched = await _asyncio.gather(
-        *[_fetch_page_text(p["url"], max_chars=1500) for p in pages],
-    )
+    sections: list[str] = []
+    for item in results[:read_limit]:
+        content = (item.get("content") or "").strip()
+        if not content:
+            continue
+        title = (item.get("title") or "").strip()
+        url = (item.get("url") or "").strip()
+        sections.append(f"--- {title} ({url})\n{_truncate(content, 3000, url)}")
 
-    sections = []
-    for page, content in zip(pages, fetched):
-        sections.append(f"--- {page['title']} ({page['url']})\n{content}")
-
+    if not sections:
+        return base
     return base + "\n\n[自动读取的前几个链接正文]\n\n" + "\n\n".join(sections)
 
 

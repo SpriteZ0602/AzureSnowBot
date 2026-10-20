@@ -1,18 +1,19 @@
 """
 tests/test_web_tools.py
 ────────────────────────
-测试网络工具（web_search 聚合 + web_read）:
-  - _fetch_page_text 截断 / 失败处理
-  - web_search 默认聚合抓取前几个链接正文
-  - web_search auto_read=false 只返回结果列表
-  - web_read 空 URL 校验
+测试网络工具（DeepSeek Search / Fetch API）:
+  - _deepseek_search 请求契约与结果解析
+  - _deepseek_fetch 正文返回 / 截断 / 失败处理
+  - web_search 默认携带正文，auto_read=false 只返回结果列表
+  - web_read 空 URL 校验与正文返回
 
 所有 httpx 请求均 mock，不发真实网络请求。
 """
 
 import sys
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+import types
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -23,105 +24,224 @@ sys.modules.setdefault("nonebot.adapters", MagicMock())
 sys.modules.setdefault("nonebot.adapters.onebot", MagicMock())
 sys.modules.setdefault("nonebot.adapters.onebot.v11", MagicMock())
 
+# plugins.llm 需要 NoneBot 运行时配置；这里用轻量模块代替，
+# 具体返回值由 _config fixture 逐个测试 patch。
+if "plugins.llm" not in sys.modules:
+    _llm_stub = types.ModuleType("plugins.llm")
+    _llm_stub.get_deepseek_tools_config = lambda: ("", "")
+    sys.modules["plugins.llm"] = _llm_stub
+
+import httpx
 import pytest
 
 from plugins.local_tools.tools import (
-    _bing_search,
-    _fetch_page_text,
+    _deepseek_fetch,
+    _deepseek_search,
     web_read_tool,
     web_search_tool,
 )
+
+_API_BASE = "https://api.deepseek.com/v1"
 
 
 # ──────────────────── httpx 假实现 ────────────────────
 
 class _FakeResp:
-    def __init__(self, text: str = "", status_code: int = 200, content: bytes | None = None):
-        self.text = text
+    def __init__(
+        self,
+        json_data: dict | None = None,
+        status_code: int = 200,
+        text: str = "",
+    ):
+        self._json = json_data if json_data is not None else {}
         self.status_code = status_code
-        self.content = content if content is not None else text.encode("utf-8")
+        self.text = text
+
+    def json(self):
+        return self._json
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
+            req = httpx.Request("POST", f"{_API_BASE}/tools/search")
+            resp = httpx.Response(
+                self.status_code, request=req, text=self.text
+            )
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}", request=req, response=resp
+            )
 
 
-class _FakeAsyncClientCM:
-    """模拟 httpx.AsyncClient 的 async with 用法"""
+class _FakeClient:
+    """模拟 httpx.AsyncClient 的 async with + post"""
 
-    def __init__(self, side_effect):
-        self._side_effect = side_effect
+    def __init__(self, handler, captured: list[dict]):
+        self._handler = handler
+        self._captured = captured
 
     async def __aenter__(self):
-        client = AsyncMock()
-        client.get = AsyncMock(side_effect=self._side_effect)
-        return client
+        return self
 
     async def __aexit__(self, *exc):
         return False
 
-
-DDG_HTML = """<html><body>
-<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F1&amp;rut=abc">First Result</a>
-<a class="result__snippet">First description</a>
-<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2F2&amp;rut=xyz">Second Result</a>
-<a class="result__snippet"><span>Second description</span></a>
-</body></html>"""
+    async def post(self, url, **kwargs):
+        self._captured.append({"url": url, **kwargs})
+        return self._handler(url, **kwargs)
 
 
-def _fake_get(url: str, **kwargs) -> _FakeResp:
-    """按 URL 返回不同内容：DDG 搜索页 vs Jina 正文页"""
-    if "duckduckgo" in url:
-        return _FakeResp(DDG_HTML)
-    return _FakeResp(f"页面正文 for {url}")
+def _patch_httpx(handler):
+    """handler(url, **kwargs) -> _FakeResp；返回 (patcher, captured)"""
+    captured: list[dict] = []
+    patcher = patch(
+        "httpx.AsyncClient",
+        side_effect=lambda **kw: _FakeClient(handler, captured),
+    )
+    return patcher, captured
 
 
-def _patch_httpx(side_effect):
-    return patch("httpx.AsyncClient", return_value=_FakeAsyncClientCM(side_effect))
+@pytest.fixture(autouse=True)
+def _config():
+    with patch(
+        "plugins.llm.get_deepseek_tools_config",
+        return_value=("test-key", _API_BASE),
+    ):
+        yield
 
 
-# ──────────────────── _fetch_page_text ────────────────────
+def _search_handler(results: list[dict]):
+    return lambda url, **kw: _FakeResp({"results": results})
 
-class TestFetchPageText:
+
+# ──────────────────── _deepseek_search ────────────────────
+
+class TestDeepSeekSearch:
+
+    async def test_request_contract(self):
+        patcher, captured = _patch_httpx(_search_handler([]))
+        with patcher:
+            await _deepseek_search("测试 查询", 7, need_content=True)
+
+        assert len(captured) == 1
+        req = captured[0]
+        assert req["url"] == f"{_API_BASE}/tools/search"
+        assert req["headers"]["Authorization"] == "Bearer test-key"
+        assert req["json"] == {
+            "query": "测试 查询",
+            "count": 7,
+            "need_content": True,
+        }
+
+    async def test_need_content_omitted_by_default(self):
+        patcher, captured = _patch_httpx(_search_handler([]))
+        with patcher:
+            await _deepseek_search("q", 5)
+
+        assert "need_content" not in captured[0]["json"]
+
+    async def test_query_truncated_to_128_chars(self):
+        patcher, captured = _patch_httpx(_search_handler([]))
+        with patcher:
+            await _deepseek_search("长" * 200, 5)
+
+        assert len(captured[0]["json"]["query"]) == 128
+
+    async def test_parses_results(self):
+        results = [
+            {
+                "title": "标题一",
+                "url": "https://example.com/1",
+                "snippet": "摘要一",
+                "summary": "长摘要一",
+                "site_name": "示例站",
+                "date": "2026-10-20",
+            },
+        ]
+        patcher, _ = _patch_httpx(_search_handler(results))
+        with patcher:
+            out = await _deepseek_search("q", 5)
+
+        assert out == results
+
+    async def test_missing_results_returns_empty(self):
+        patcher, _ = _patch_httpx(lambda url, **kw: _FakeResp({}))
+        with patcher:
+            out = await _deepseek_search("q", 5)
+        assert out == []
+
+    async def test_http_error_propagates(self):
+        patcher, _ = _patch_httpx(
+            lambda url, **kw: _FakeResp({}, status_code=503)
+        )
+        with patcher, pytest.raises(httpx.HTTPStatusError):
+            await _deepseek_search("q", 5)
+
+    async def test_missing_key_raises(self):
+        with patch("plugins.llm.get_deepseek_tools_config", return_value=("", "")):
+            with pytest.raises(RuntimeError):
+                await _deepseek_search("q", 5)
+
+
+# ──────────────────── _deepseek_fetch ────────────────────
+
+class TestDeepSeekFetch:
+
+    async def test_returns_markdown_with_title(self):
+        patcher, captured = _patch_httpx(
+            lambda url, **kw: _FakeResp(
+                {"title": "文章标题", "content": "正文内容"}
+            )
+        )
+        with patcher:
+            out = await _deepseek_fetch("https://example.com/a")
+
+        assert out == "# 文章标题\n\n正文内容"
+        assert captured[0]["url"] == f"{_API_BASE}/tools/fetch"
+        assert captured[0]["json"] == {"url": "https://example.com/a"}
+        assert captured[0]["headers"]["Authorization"] == "Bearer test-key"
 
     async def test_truncates_long_content(self):
-        with _patch_httpx(lambda url, **kw: _FakeResp("长" * 2000)):
-            out = await _fetch_page_text("https://x.com/a", max_chars=100)
+        patcher, _ = _patch_httpx(
+            lambda url, **kw: _FakeResp({"title": "T", "content": "长" * 2000})
+        )
+        with patcher:
+            out = await _deepseek_fetch("https://example.com/a", max_chars=100)
+
         assert "内容被截断" in out
-        # 正文部分不超过 max_chars（截断消息额外附加）
-        assert len(out) < 200
+        assert len(out) < 250
 
-    async def test_short_content_untouched(self):
-        with _patch_httpx(lambda url, **kw: _FakeResp("短文")):
-            out = await _fetch_page_text("https://x.com/a", max_chars=100)
-        assert out == "短文"
+    async def test_empty_content_returns_error(self):
+        patcher, _ = _patch_httpx(
+            lambda url, **kw: _FakeResp({"title": "T", "content": ""})
+        )
+        with patcher:
+            out = await _deepseek_fetch("https://example.com/a")
 
-    async def test_http_error_returns_error_string(self):
-        with _patch_httpx(lambda url, **kw: _FakeResp("", status_code=500)):
-            out = await _fetch_page_text("https://x.com/a")
+        assert "页面正文为空" in out
+
+    async def test_http_403_returns_error_string(self):
+        patcher, _ = _patch_httpx(
+            lambda url, **kw: _FakeResp({}, status_code=403, text="blocked")
+        )
+        with patcher:
+            out = await _deepseek_fetch("https://example.com/a")
+
+        assert "网页抓取失败" in out
+        assert "403" in out
+
+    async def test_network_error_returns_error_string(self):
+        def _boom(url, **kw):
+            raise OSError("connection reset")
+
+        patcher, _ = _patch_httpx(_boom)
+        with patcher:
+            out = await _deepseek_fetch("https://example.com/a")
+
         assert "读取网页失败" in out
 
-    async def test_empty_page_returns_error_string(self):
-        with _patch_httpx(lambda url, **kw: _FakeResp("")):
-            out = await _fetch_page_text("https://x.com/a")
-        assert "页面内容为空" in out
-
-    async def test_jina_403_warning_page_falls_back_to_direct(self):
-        """Jina 返回 HTTP 200 的 403 告警页时，应视为失败并直连抓取"""
-        def _side(url: str, **kw):
-            if "r.jina.ai" in url:
-                return _FakeResp(
-                    "Title: Just a moment...\n\n"
-                    "Warning: Target URL returned error 403: Forbidden"
-                )
-            return _FakeResp("直连抓到的真正文")
-
-        with _patch_httpx(_side):
-            out = await _fetch_page_text("https://x.com/a")
-
-        assert "真正文" in out
-        assert "Target URL returned error" not in out
-        assert "Just a moment" not in out
+    async def test_missing_key_returns_error(self):
+        with patch("plugins.llm.get_deepseek_tools_config", return_value=("", "")):
+            out = await _deepseek_fetch("https://example.com/a")
+        assert "未配置 DeepSeek API Key" in out
 
 
 # ──────────────────── web_read ────────────────────
@@ -132,92 +252,134 @@ class TestWebRead:
         assert "[错误]" in await web_read_tool(url="")
 
     async def test_reads_page(self):
-        with _patch_httpx(lambda url, **kw: _FakeResp("页面正文")):
+        patcher, _ = _patch_httpx(
+            lambda url, **kw: _FakeResp({"title": "T", "content": "页面正文"})
+        )
+        with patcher:
             out = await web_read_tool(url="https://x.com/a")
-        assert out == "页面正文"
-
-
-# ──────────────────── _bing_search ────────────────────
-
-BING_HTML = """<html><body><ol>
-<li class="b_algo"><link rel="stylesheet" href="/rp/x.css"/><h2 class=""><a target="_blank" href="https://a.com/1" h="ID=SERP,1.1">First <strong>Result</strong></a></h2>
-<div class="b_caption"><p class="b_lineclamp2">First description &amp; more</p></div></li>
-<li class="b_algo"><h2 class=""><a href="https://example.org/2">Second Result</a></h2>
-<div class="b_caption"><p class="b_lineclamp2">2025年8月18日&ensp;Second description</p></div></li>
-</ol></body></html>"""
-
-
-class TestBingSearch:
-    """Bing 主引擎：解析 cn.bing.com HTML 结果（RSS 端点已废弃，返回随机垃圾），
-    固定中文市场，绕过代理环境变量"""
-
-    async def test_uses_cn_bing_with_zh_market_and_no_proxy(self):
-        captured = {}
-
-        class _RecordingClient:
-            def __init__(self, **init_kwargs):
-                captured["init"] = init_kwargs
-
-            async def __aenter__(self):
-                async def _get(url, **kw):
-                    captured["url"] = url
-                    captured["params"] = kw.get("params", {})
-                    return _FakeResp(BING_HTML)
-
-                self.get = _get
-                return self
-
-            async def __aexit__(self, *exc):
-                return False
-
-        with patch("httpx.AsyncClient", _RecordingClient):
-            results = await _bing_search("facebook", 5)
-
-        assert len(results) == 2
-        assert results[0]["title"] == "First Result"  # <strong> 被剥离
-        assert results[0]["url"] == "https://a.com/1"
-        assert results[0]["desc"] == "First description & more"  # 实体被反转义
-        assert results[1]["desc"] == "2025年8月18日 Second description"
-        assert "cn.bing.com" in captured["url"]
-        assert captured["params"]["mkt"] == "zh-CN"
-        assert captured["params"]["q"] == "facebook"
-        assert captured["init"].get("trust_env") is False
-
-    async def test_junk_page_returns_empty(self):
-        """页面没有 b_algo 块（验证页/异常页）时返回空列表，交给上层降级 DDG"""
-        with _patch_httpx(lambda url, **kw: _FakeResp("<html>安全验证</html>")):
-            results = await _bing_search("任意", 5)
-        assert results == []
+        assert out == "# T\n\n页面正文"
 
 
 # ──────────────────── web_search ────────────────────
 
+def _sample_results(n: int = 5) -> list[dict]:
+    return [
+        {
+            "title": f"结果{i}",
+            "url": f"https://example.com/{i}",
+            "summary": f"摘要{i}",
+            "content": f"正文{i}",
+            "site_name": "示例站",
+            "date": "2026-10-20T08:00:00+08:00",
+        }
+        for i in range(1, n + 1)
+    ]
+
+
 class TestWebSearch:
 
-    async def test_auto_read_aggregates_pages(self):
-        """默认 auto_read=true：结果列表 + 自动抓取的正文在一个返回里"""
-        with _patch_httpx(_fake_get):
+    async def test_auto_read_requests_content_inline(self):
+        """auto_read=true：单次搜索请求带 need_content=true，正文直接来自搜索结果"""
+        patcher, captured = _patch_httpx(_search_handler(_sample_results()))
+        with patcher:
             out = await web_search_tool(query="测试 查询", num_results=5)
 
-        # 搜索结果部分
-        assert "搜索结果" in out
-        assert "First Result" in out
-        assert "https://example.com/1" in out
-        assert "Second description" in out
+        # 只发一次 POST，不再逐页 fetch
+        assert len(captured) == 1
+        assert captured[0]["json"]["need_content"] is True
 
-        # 聚合正文部分（_fetch_page_text 会把 URL 拼成 r.jina.ai/<url>）
+        assert "搜索结果" in out
+        assert "结果1" in out
+        assert "https://example.com/1" in out
+        assert "摘要1" in out
+        assert "示例站" in out
+        assert "2026-10-20" in out
+
         assert "[自动读取的前几个链接正文]" in out
-        assert "页面正文 for https://r.jina.ai/https://example.com/1" in out
-        assert "页面正文 for https://r.jina.ai/https://example.org/2" in out
+        # 只展示前 3 条正文
+        assert "正文1" in out
+        assert "正文2" in out
+        assert "正文3" in out
+        assert "正文4" not in out
+        assert "正文5" not in out
 
     async def test_auto_read_false_returns_list_only(self):
-        with _patch_httpx(_fake_get):
+        patcher, captured = _patch_httpx(_search_handler(_sample_results()))
+        with patcher:
             out = await web_search_tool(query="测试 查询", auto_read=False)
+
+        assert "need_content" not in captured[0]["json"]
         assert "[自动读取的前几个链接正文]" not in out
-        assert "First Result" in out
+        assert "结果1" in out
+        assert "正文1" not in out
+
+    async def test_long_summary_truncated(self):
+        """summary 可能很长，列表里只保留 300 字"""
+        results = [
+            {
+                "title": "T",
+                "url": "https://example.com/a",
+                "summary": "长" * 1000,
+            }
+        ]
+        patcher, _ = _patch_httpx(_search_handler(results))
+        with patcher:
+            out = await web_search_tool(query="q", auto_read=False)
+
+        assert "长" * 301 not in out
+        assert "长" * 300 + "…" in out
+
+    async def test_summary_falls_back_to_snippet(self):
+        results = [
+            {
+                "title": "T",
+                "url": "https://example.com/a",
+                "snippet": "短摘要",
+                "content": "",
+            }
+        ]
+        patcher, _ = _patch_httpx(_search_handler(results))
+        with patcher:
+            out = await web_search_tool(query="q", auto_read=False)
+
+        assert "短摘要" in out
+
+    async def test_missing_content_skips_section(self):
+        results = [
+            {"title": "T", "url": "https://example.com/a", "summary": "S"},
+        ]
+        patcher, _ = _patch_httpx(_search_handler(results))
+        with patcher:
+            out = await web_search_tool(query="q")
+
+        assert "T" in out
+        assert "[自动读取的前几个链接正文]" not in out
+
+    async def test_num_results_clamped(self):
+        patcher, captured = _patch_httpx(_search_handler([]))
+        with patcher:
+            await web_search_tool(query="q", num_results=99)
+        assert captured[0]["json"]["count"] == 10
+
+        patcher, captured = _patch_httpx(_search_handler([]))
+        with patcher:
+            await web_search_tool(query="q", num_results=0)
+        assert captured[0]["json"]["count"] == 1
 
     async def test_search_failure(self):
-        with _patch_httpx(lambda url, **kw: _FakeResp("", status_code=503)):
+        patcher, _ = _patch_httpx(
+            lambda url, **kw: _FakeResp({}, status_code=503)
+        )
+        with patcher:
+            out = await web_search_tool(query="测试 查询")
+        assert "搜索失败" in out
+
+    async def test_api_error_message(self):
+        def _boom(url, **kw):
+            raise OSError("connection reset")
+
+        patcher, _ = _patch_httpx(_boom)
+        with patcher:
             out = await web_search_tool(query="测试 查询")
         assert "搜索失败" in out
 
@@ -225,15 +387,8 @@ class TestWebSearch:
         out = await web_search_tool(query="")
         assert "[错误]" in out
 
-    async def test_single_page_read_failure_does_not_kill_aggregation(self):
-        """某个链接读取失败时，其余页面仍返回"""
-        def _partial(url: str, **kw):
-            if "example.com/1" in url:
-                return _FakeResp("", status_code=500)
-            return _fake_get(url, **kw)
-
-        with _patch_httpx(_partial):
-            out = await web_search_tool(query="测试 查询")
-
-        assert "读取网页失败" in out  # 失败页的错误提示
-        assert "页面正文 for https://r.jina.ai/https://example.org/2" in out  # 成功页正常
+    async def test_empty_results(self):
+        patcher, _ = _patch_httpx(_search_handler([]))
+        with patcher:
+            out = await web_search_tool(query="不存在的内容")
+        assert "未找到" in out

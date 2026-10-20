@@ -121,6 +121,37 @@ API_KEY, BASE_URL, MODEL = _resolve()
 logger.info(f"LLM Provider: {LLM_PROVIDER} | Model: {MODEL} | Base URL: {BASE_URL[:50]}...")
 
 
+# ──────────────────── DeepSeek Tools API 配置 ────────────────────
+
+def get_deepseek_tools_config() -> tuple[str, str]:
+    """
+    返回 DeepSeek 网页搜索/抓取 Tools API 的 (api_key, base_url)。
+
+    base_url 已带 /v1，调用端点为:
+      POST {base_url}/tools/search
+      POST {base_url}/tools/fetch
+
+    主力 provider 为 deepseek 时沿用其配置（支持自定义 LLM_BASE_URL 网关）；
+    否则读取独立的 deepseek_api_key / DEEPSEEK_API_KEY。
+    未配置 DeepSeek key 时返回 ("", "")。
+    """
+    if LLM_PROVIDER == "deepseek":
+        api_key, base_url = API_KEY, BASE_URL
+    else:
+        resolved = _resolve_provider("deepseek")
+        if resolved is None:
+            return "", ""
+        api_key, base_url, _ = resolved
+
+    if not api_key:
+        return "", ""
+
+    base = base_url.rstrip("/")
+    if not base.endswith("/v1"):
+        base += "/v1"
+    return api_key, base
+
+
 # ──────────────────── Fallback 链 ────────────────────
 # 主力 provider 之外的、有配置 key 的 provider 作为 fallback
 _FALLBACK_CHAIN: list[tuple[str, str, str, str]] = []  # [(provider, key, base_url, model)]
