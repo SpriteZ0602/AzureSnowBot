@@ -380,7 +380,7 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
                         tool_result = await mcp_call_tool(fn_name, fn_args)
 
                 from .tool_log import log_tool_call
-                log_tool_call("heartbeat", fn_name, fn_args, tool_result)
+                log_tool_call("heartbeat", fn_name, fn_args, tool_result, context=tool_ctx)
                 from .tool_history import record_tool_execution
                 record_tool_execution(fn_name, fn_args, tool_result, context=tool_ctx, source="heartbeat")
 

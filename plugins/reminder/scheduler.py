@@ -324,7 +324,7 @@ async def _execute_scheduled_task(job: ReminderJob) -> str:
                 log_tool_call(
                     "task", fn_name, fn_args, tool_result,
                     user_id=job.user_id,
-                    group_id=job.group_id if job.chat_type == "private" else job.target_id,
+                    context=tool_ctx,
                 )
                 from ..tool_history import record_tool_execution
                 record_tool_execution(fn_name, fn_args, tool_result, context=tool_ctx, source="task")

@@ -126,6 +126,7 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 
 ### 群聊工具执行记录
 
+- 管理日志由 `plugins/tool_log.py` 写入 `data/tool_calls/groups/<gid>.jsonl`，Admin 私聊写入 `data/tool_calls/admin.jsonl`，缺少归属的记录写入 `unscoped.jsonl`。只保留滚动七天，启动及每小时清理；旧 `data/tool_calls.jsonl` 也按相同规则清理，Dashboard 聚合新旧日志。管理日志不进入 LLM 上下文，不保存结果正文。
 - `plugins/tool_history.py` 统一将简短执行凭证写进当前群、执行开始时人格的 JSONL，`role=assistant`，不发到 QQ。
 - 覆盖群主对话、群心跳、定时任务、Sub-Agent 及 `/塔罗` 指令；参数最多 200 字符，结果摘要最多 600 字符，不另存工具全文。
 - 本地工具可通过 `@register_tool(history_formatter=...)` 定制摘要；默认短结果完整、长结果截断。MCP/Skill 使用默认摘要。
@@ -477,7 +478,7 @@ python -c "import ast; ast.parse(open('plugins/chat/proactive.py', encoding='utf
 已在 .gitignore 中的：
 - `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.pytest_tmp*/`, `.env`, `vendor/`, `reference/`
 - `good_persona/` — 人格草稿/备份目录，含敏感 prompt 内容
-- `data/sessions`, `data/groups`, `data/reminders.json`, `data/tool_calls.jsonl`
+- `data/sessions`, `data/groups`, `data/reminders.json`, `data/tool_calls.jsonl`, `data/tool_calls/`
 - `data/admin/config.json`, `data/admin/history.jsonl`, `data/admin/SOUL.md`,
   `data/admin/token_stats.json`, `data/admin/.memory_index.json`, `data/admin/memories.jsonl`
 - `web/node_modules/`, `web/dist/`, `docs/`

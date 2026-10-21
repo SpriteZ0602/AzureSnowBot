@@ -4,6 +4,8 @@
 加载群聊相关的所有子模块。
 """
 
+import asyncio
+
 from nonebot import get_driver
 from nonebot.log import logger
 from ..mcp import manager as mcp
@@ -11,6 +13,15 @@ from ..skill import manager as skill
 
 # MCP + Skill 生命周期
 driver = get_driver()
+_tool_log_cleanup_task: asyncio.Task | None = None
+
+
+async def _cleanup_tool_logs_periodically() -> None:
+    from ..tool_log import CLEANUP_INTERVAL_SECONDS, cleanup_tool_logs
+
+    while True:
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+        await asyncio.to_thread(cleanup_tool_logs)
 
 
 def _start_group_heartbeats() -> None:
@@ -30,6 +41,12 @@ def _start_group_heartbeats() -> None:
 
 @driver.on_startup
 async def _startup():
+    global _tool_log_cleanup_task
+    from ..tool_log import cleanup_tool_logs
+
+    await asyncio.to_thread(cleanup_tool_logs)
+    if _tool_log_cleanup_task is None or _tool_log_cleanup_task.done():
+        _tool_log_cleanup_task = asyncio.create_task(_cleanup_tool_logs_periodically())
     skill.scan_skills()     # Skill 系统（同步，纯文件扫描）
     await mcp.initialize()  # MCP 服务器（异步，需要连接）
     _start_group_heartbeats()
@@ -37,6 +54,14 @@ async def _startup():
 
 @driver.on_shutdown
 async def _shutdown():
+    global _tool_log_cleanup_task
+    if _tool_log_cleanup_task is not None:
+        _tool_log_cleanup_task.cancel()
+        try:
+            await _tool_log_cleanup_task
+        except asyncio.CancelledError:
+            pass
+        _tool_log_cleanup_task = None
     await mcp.shutdown()
 
 

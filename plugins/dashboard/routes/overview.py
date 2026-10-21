@@ -70,17 +70,7 @@ async def get_overview(_user: str = Depends(get_current_user)):
 
 
 def _load_recent_tool_calls(n: int) -> list[dict]:
-    """读取最近 n 条工具调用日志"""
-    log_file = Path("data/tool_calls.jsonl")
-    if not log_file.exists():
-        return []
-    lines = log_file.read_text(encoding="utf-8").strip().splitlines()
-    result = []
-    for line in reversed(lines):
-        if len(result) >= n:
-            break
-        try:
-            result.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return result
+    """聚合各群、Admin 和仍在七天保留期内的旧日志。"""
+    from ...tool_log import load_recent_tool_calls
+
+    return load_recent_tool_calls(n)
