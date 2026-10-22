@@ -65,7 +65,10 @@ def create_dashboard_app() -> FastAPI:
                     content={"detail": "登录尝试过于频繁，请稍后再试"},
                 )
             _login_attempts[client_ip].append(now)
-        return await call_next(request)
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     # 注册路由
     app.include_router(auth_router, prefix="/auth", tags=["认证"])

@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query
 
 from ..auth import get_current_user
+from ..path_security import confined_path, validate_group_id, validate_name
 
 router = APIRouter()
 
@@ -57,7 +58,8 @@ async def list_groups(_user: str = Depends(get_current_user)):
         for gdir in sorted(GROUPS_DIR.iterdir()):
             if not gdir.is_dir():
                 continue
-            cfg_path = gdir / "config.json"
+            validate_group_id(gdir.name)
+            cfg_path = confined_path(GROUPS_DIR, gdir.name, "config.json")
             config = {}
             if cfg_path.exists():
                 try:
@@ -87,7 +89,7 @@ async def get_group_history(
     _user: str = Depends(get_current_user),
 ):
     """分页读取群聊对话历史"""
-    path = GROUPS_DIR / gid / f"{persona}.jsonl"
+    path = confined_path(GROUPS_DIR, validate_group_id(gid), f"{validate_name(persona)}.jsonl")
     all_msgs = _load_jsonl(path)
     total = len(all_msgs)
     all_msgs.reverse()
@@ -113,6 +115,7 @@ async def get_group_chatlog(
     _user: str = Depends(get_current_user),
 ):
     """检索群聊全量记录"""
+    validate_group_id(gid)
     from ...group.chatlog import load_chatlog
 
     records = load_chatlog(

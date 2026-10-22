@@ -4,8 +4,23 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from ..auth import get_current_user
+from ..path_security import confined_path, validate_group_id, validate_name
 
 router = APIRouter()
+
+
+def _persona_paths(name: str, group_id: str = ""):
+    from ...persona.manager import GLOBAL_PERSONA_DIR, GROUP_SESSION_DIR
+
+    validate_name(name)
+    global_path = confined_path(GLOBAL_PERSONA_DIR, f"{name}.txt")
+    confined_path(GLOBAL_PERSONA_DIR, "_base.txt")
+    group_path = None
+    if group_id:
+        validate_group_id(group_id)
+        group_path = confined_path(GROUP_SESSION_DIR, group_id, "personas", f"{name}.txt")
+        confined_path(GROUP_SESSION_DIR, group_id, "config.json")
+    return global_path, group_path
 
 
 class PersonaCreateRequest(BaseModel):
@@ -35,6 +50,7 @@ async def list_all_personas(_user: str = Depends(get_current_user)):
     for name in list_global_personas():
         if name == "_base":
             continue
+        _persona_paths(name)
         prompt = load_persona_prompt(name)
         global_list.append({
             "name": name,
@@ -49,8 +65,12 @@ async def list_all_personas(_user: str = Depends(get_current_user)):
             if not gdir.is_dir():
                 continue
             gid = gdir.name
+            validate_group_id(gid)
+            confined_path(GROUP_SESSION_DIR, gid, "config.json")
+            confined_path(GROUP_SESSION_DIR, gid, "personas")
             active = get_active_persona(gid)
             for pname in list_group_personas(gid):
+                _persona_paths(pname, gid)
                 prompt = load_persona_prompt(pname, gid)
                 group_list.append({
                     "name": pname,
@@ -69,6 +89,7 @@ async def list_all_personas(_user: str = Depends(get_current_user)):
 @router.get("/{name}")
 async def get_persona(name: str, group_id: str = "", _user: str = Depends(get_current_user)):
     """读取指定人格的完整 prompt"""
+    _persona_paths(name, group_id)
     from ...persona.manager import load_persona_prompt
     prompt = load_persona_prompt(name, group_id or None)
     if prompt is None:
@@ -79,14 +100,17 @@ async def get_persona(name: str, group_id: str = "", _user: str = Depends(get_cu
 @router.post("")
 async def create_persona(req: PersonaCreateRequest, _user: str = Depends(get_current_user)):
     """创建新人格"""
-    from ...persona.manager import persona_exists, create_group_persona, GLOBAL_PERSONA_DIR
+    from ...persona.manager import persona_exists
+
+    global_path, group_path = _persona_paths(req.name, req.group_id)
 
     if req.group_id:
         if persona_exists(req.name, req.group_id):
             raise HTTPException(status.HTTP_409_CONFLICT, f"人格 '{req.name}' 已存在")
-        create_group_persona(req.group_id, req.name, req.prompt)
+        group_path.parent.mkdir(parents=True, exist_ok=True)
+        group_path.write_text(req.prompt.strip(), encoding="utf-8")
     else:
-        path = GLOBAL_PERSONA_DIR / f"{req.name}.txt"
+        path = global_path
         if path.exists():
             raise HTTPException(status.HTTP_409_CONFLICT, f"通用人格 '{req.name}' 已存在")
         path.write_text(req.prompt.strip(), encoding="utf-8")
@@ -102,12 +126,8 @@ async def update_persona(
     _user: str = Depends(get_current_user),
 ):
     """更新人格 prompt"""
-    from ...persona.manager import GLOBAL_PERSONA_DIR, _group_persona_dir
-
-    if group_id:
-        path = _group_persona_dir(group_id) / f"{name}.txt"
-    else:
-        path = GLOBAL_PERSONA_DIR / f"{name}.txt"
+    global_path, group_path = _persona_paths(name, group_id)
+    path = group_path if group_id else global_path
 
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"人格 '{name}' 不存在")
@@ -118,19 +138,14 @@ async def update_persona(
 @router.delete("/{name}")
 async def delete_persona(name: str, group_id: str = "", _user: str = Depends(get_current_user)):
     """删除人格"""
+    global_path, group_path = _persona_paths(name, group_id)
     if name in ("default", "_base"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "不能删除默认人格")
 
-    from ...persona.manager import delete_group_persona, GLOBAL_PERSONA_DIR
-
-    if group_id:
-        if not delete_group_persona(group_id, name):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, f"群私有人格 '{name}' 不存在")
-    else:
-        path = GLOBAL_PERSONA_DIR / f"{name}.txt"
-        if not path.exists():
-            raise HTTPException(status.HTTP_404_NOT_FOUND, f"通用人格 '{name}' 不存在")
-        path.unlink()
+    path = group_path if group_id else global_path
+    if not path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"人格 '{name}' 不存在")
+    path.unlink()
 
     return {"ok": True}
 
@@ -142,6 +157,7 @@ async def set_group_active_persona(
     _user: str = Depends(get_current_user),
 ):
     """切换群活跃人格"""
+    _persona_paths(name, validate_group_id(gid))
     from ...persona.manager import persona_exists, set_active_persona
 
     if not persona_exists(name, gid):

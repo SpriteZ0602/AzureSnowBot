@@ -1,7 +1,8 @@
 """认证路由"""
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from ..auth import authenticate, create_access_token, create_refresh_token, decode_token
 
@@ -9,8 +10,8 @@ router = APIRouter()
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=72)
 
 
 class TokenResponse(BaseModel):
@@ -20,12 +21,12 @@ class TokenResponse(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str = Field(min_length=1, max_length=4096)
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(req: LoginRequest):
-    if not authenticate(req.username, req.password):
+    if not await run_in_threadpool(authenticate, req.username, req.password):
         from fastapi import HTTPException, status
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "用户名或密码错误")
     return TokenResponse(

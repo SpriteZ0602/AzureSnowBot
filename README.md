@@ -395,9 +395,9 @@ ADMIN_NUMBER=你的QQ号
 | `GROUP_WHITELIST` | 允许使用的群号列表（JSON 数组） | `[]`（空 = 不响应任何群） |
 | `ADMIN_NUMBER` | 管理员 QQ 号，仅该用户可以私聊 Bot | 空 |
 | `PROACTIVE_IDLE_SECONDS` | Admin 私聊主动发言空闲等待秒数 | `3600`（1 小时） |
-| `DASHBOARD_USER` | Dashboard 登录用户名 | `373900859` |
+| `DASHBOARD_USER` | Dashboard 登录用户名 | `admin` |
 | `DASHBOARD_PASSWORD_HASH` | Dashboard 密码 bcrypt 哈希（留空则拒绝登录） | 空 |
-| `DASHBOARD_SECRET_KEY` | JWT 签名密钥（留空则每次重启随机生成） | 空 |
+| `DASHBOARD_SECRET_KEY` | JWT 签名密钥（留空则每次重启随机生成；手动设置至少 32 字节） | 空 |
 
 2. 配置 Admin 上下文文件（可选，按需编辑）：
 

@@ -6,7 +6,7 @@ tests/test_dashboard_auth.py
   - 错误密码 / 错误账号拒绝
   - 未配置 DASHBOARD_PASSWORD_HASH 时拒绝登录（不硬编码密码回退）
 
-按 AGENTS.md 约定：importlib 直接加载目标文件，fastapi/jwt 用 mock。
+按 AGENTS.md 约定：importlib 直接加载目标文件，不启动 NoneBot。
 """
 
 import sys
@@ -16,10 +16,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# Mock fastapi / jwt（authenticate 不依赖它们，只加载时需要）
-sys.modules.setdefault("fastapi", MagicMock())
-sys.modules.setdefault("fastapi.security", MagicMock())
-sys.modules.setdefault("jwt", MagicMock())
+# 使用真实 fastapi / jwt，避免污染其他 HTTP 安全回归测试。
 
 import bcrypt
 import pytest

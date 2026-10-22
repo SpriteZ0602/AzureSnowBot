@@ -117,11 +117,13 @@ FastAPI 子应用挂载到 NoneBot2 的 ASGI server（共享进程，直接调�
 **认证配置（.env）：**
 ```env
 DASHBOARD_USER=admin
-DASHBOARD_PASSWORD_HASH=       # bcrypt 哈希，留空则默认密码 admin
+DASHBOARD_PASSWORD_HASH=       # bcrypt 哈希，留空则拒绝登录
 DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 ```
 
 **前端项目位置**：`web/`（Vue 3 + Vite + Element Plus + ECharts），构建产物 `web/dist/`。
+
+**安全边界**：JWT 空值/空白自动随机化，手动密钥至少 32 字节；验证 Token 的账号、类型及必要时间字段。配置 API 的展示值与 `raw` 均脱敏（包括多行密钥及 token），更新拒绝换行注入。Dashboard 文件接口统一使用 `path_security.py` 校验名称、数字群号及解析后的目录边界（包含符号链接），不能把未经验证的参数直接拼进路径。公开访问应使用 HTTPS 反向代理，个人管理优先 SSH 隧道。
 
 ### Agentic Loop（工具调用）
 群聊和 Admin 私聊都有完整 Agentic Loop：

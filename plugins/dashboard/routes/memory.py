@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..auth import get_current_user
+from ..path_security import confined_path, validate_group_id
 
 router = APIRouter()
 
@@ -25,9 +26,9 @@ def _memory_path(scope: str) -> Path:
     存不到 Bot 会读的位置。
     """
     if scope == "admin":
-        return ADMIN_MEMORY
-    from ...persona.manager import group_memory_path
-    return group_memory_path(scope)
+        return confined_path(ADMIN_MEMORY.parent, ADMIN_MEMORY.name)
+    from ...persona.manager import GROUP_MEMORY_DIR
+    return confined_path(GROUP_MEMORY_DIR, validate_group_id(scope), "MEMORY.md")
 
 
 class MemoryUpdateRequest(BaseModel):

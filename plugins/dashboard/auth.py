@@ -29,7 +29,13 @@ _security = HTTPBearer(auto_error=False)
 def _verify_password(plain: str, hashed: str) -> bool:
     """bcrypt 验证密码"""
     import bcrypt
-    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    # bcrypt 最多接收 72 字节；异常配置和超长输入均按认证失败处理。
+    if not plain or len(plain.encode("utf-8")) > 72:
+        return False
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 def authenticate(username: str, password: str) -> bool:
@@ -69,7 +75,13 @@ def create_refresh_token(username: str) -> str:
 def decode_token(token: str) -> dict:
     """解码并验证 JWT，返回 payload"""
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        payload = jwt.decode(
+            token, SECRET_KEY, algorithms=["HS256"],
+            options={"require": ["sub", "type", "exp", "iat"]},
+        )
+        if payload.get("sub") != DASHBOARD_USER or payload.get("type") not in ("access", "refresh"):
+            raise jwt.InvalidTokenError("无效的账号或 Token 类型")
+        return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token 已过期")
     except jwt.InvalidTokenError:
