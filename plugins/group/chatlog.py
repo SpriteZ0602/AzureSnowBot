@@ -66,7 +66,7 @@ async def _record_group_message(bot: Bot, event: GroupMessageEvent):
     user_id = str(event.user_id)
     nickname = event.sender.nickname or user_id
 
-    append_chatlog(group_id, user_id, nickname, text)
+    append_chatlog(group_id, user_id, nickname, text, message_id=event.message_id)
 
     # 全量上下文模式（/listen on）：把非 @Bot 的群消息也写入会话历史，
     # 使 @Bot 回复时能加载全量群聊上下文。@Bot 消息由 handler 记录（格式更完整）。

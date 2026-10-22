@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import RLock
 
@@ -24,6 +25,7 @@ MAX_ITEM_TAGS = 5
 TAG_LENGTH = 16
 _lock = RLock()
 _downloads = asyncio.Semaphore(2)
+_file_work = asyncio.Semaphore(2)
 
 
 class StickerError(ValueError):
@@ -155,17 +157,20 @@ def _check_tags(data: dict, tags: list[str], exclude: str = "") -> None:
         raise StickerError(f"本群最多 {MAX_TAGS} 个不同标签，请先整理标签")
 
 
-def add(gid: str, raw: bytes | Path, tags: list[str], uploader: str = "", description: str = "") -> tuple[dict, bool]:
-    tags = normalize_tags(tags)
-    content, ext, mime = _prepare(raw)
+def content_hash(raw: bytes | Path) -> str:
     if isinstance(raw, Path):
         hasher = hashlib.sha256()
         with raw.open("rb") as file:
             for chunk in iter(lambda: file.read(1024 * 1024), b""):
                 hasher.update(chunk)
-        digest = hasher.hexdigest()
-    else:
-        digest = hashlib.sha256(raw).hexdigest()
+        return hasher.hexdigest()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def add(gid: str, raw: bytes | Path, tags: list[str], uploader: str = "", description: str = "") -> tuple[dict, bool]:
+    tags = normalize_tags(tags)
+    content, ext, mime = _prepare(raw)
+    digest = content_hash(raw)
     size = content.stat().st_size if isinstance(content, Path) else len(content)
     with _lock:
         data = _load(gid)
@@ -210,17 +215,19 @@ def add(gid: str, raw: bytes | Path, tags: list[str], uploader: str = "", descri
         return dict(item), True
 
 
-async def collect(gid: str, url: str, tags: list[str], uploader: str = "", description: str = "") -> tuple[dict, bool]:
-    normalize_tags(tags)
+@asynccontextmanager
+async def downloaded_image(gid: str, url: str):
+    """仅在明确收藏时下载，临时文件可供识图与保存共用，退出后清理。"""
     parsed = httpx.URL(url)
     if parsed.scheme not in ("https", "http") or not parsed.host:
         raise StickerError("引用图片没有可下载的 HTTP 地址，请重新发送图片")
-    async with _downloads:
-        directory = group_dir(gid)
-        directory.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(prefix=".download-", suffix=".tmp", dir=directory)
-        temp = Path(name)
-        try:
+    directory = group_dir(gid)
+    directory.mkdir(parents=True, exist_ok=True)
+    temp = None
+    try:
+        async with _downloads:
+            fd, name = tempfile.mkstemp(prefix=".download-", suffix=".tmp", dir=directory)
+            temp = Path(name)
             with os.fdopen(fd, "wb") as file:
                 async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
                     async with client.stream("GET", url) as response:
@@ -233,18 +240,30 @@ async def collect(gid: str, url: str, tags: list[str], uploader: str = "", descr
                             file.write(chunk)
                 file.flush()
                 os.fsync(file.fileno())
-            task = asyncio.create_task(asyncio.to_thread(add, gid, temp, tags, uploader, description))
-            try:
-                return await asyncio.shield(task)
-            except asyncio.CancelledError:
-                # 文件仍由工作线程使用时，先等线程退出再清理临时文件。
-                try:
-                    await task
-                except Exception:
-                    pass
-                raise
-        finally:
+        yield temp
+    finally:
+        if temp is not None:
             temp.unlink(missing_ok=True)
+
+
+async def run_file_task(fn, *args):
+    async with _file_work:
+        task = asyncio.create_task(asyncio.to_thread(fn, *args))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # 文件仍由工作线程使用时，先等线程退出再清理临时文件。
+            try:
+                await task
+            except Exception:
+                pass
+            raise
+
+
+async def collect(gid: str, url: str, tags: list[str], uploader: str = "", description: str = "") -> tuple[dict, bool]:
+    normalize_tags(tags)
+    async with downloaded_image(gid, url) as temp:
+        return await run_file_task(add, gid, temp, tags, uploader, description)
 
 
 def update_tags(gid: str, sticker_id: str, tags: list[str]) -> dict:

@@ -12,7 +12,7 @@ import json
 import time
 import types
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 
 import pytest
 
@@ -109,6 +109,18 @@ class TestAppendAndLoad:
         assert records[0]["name"] == "Alice"
         assert records[0]["text"] == "hello"
         assert "ts" in records[0]
+
+    async def test_recorder_retains_qq_message_id_without_listen_mode(self, monkeypatch):
+        monkeypatch.setattr(_mod, "in_whitelist", lambda gid: True)
+        monkeypatch.setattr(_mod, "get_listen_all", lambda gid: False)
+        monkeypatch.setattr(_mod, "extract_text", AsyncMock(return_value="[图片 img_123，尚未识别]"))
+        event = types.SimpleNamespace(group_id=111, user_id=9, self_id=100, message_id=77,
+                                      sender=types.SimpleNamespace(nickname="Alice"), get_plaintext=lambda: "",
+                                      is_tome=lambda: False, message=[])
+        await _mod._record_group_message(MagicMock(), event)
+        with _db._connect() as conn:
+            row = conn.execute("SELECT message_id,uid FROM messages").fetchone()
+        assert row == ("77", "9")
 
     def test_append_multiple(self, tmp_chatlog_dir):
         append_chatlog("111", "u1", "Alice", "msg1")

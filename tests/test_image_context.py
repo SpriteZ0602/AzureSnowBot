@@ -372,6 +372,25 @@ async def test_empty_plain_reply_without_images_does_not_report_vision_failure(g
     assert images.FAILURE_REPLY not in str(load_jsonl_history(path("123", "cat")))
 
 
+async def test_recent_sticker_tool_gets_current_message_boundary_without_a_quote(group_handler):
+    handler, event, llm, sent, _, path = group_handler
+    event.reply_id, event.reply = None, None
+    result = "最近图片收藏完成：新收藏 8 张，标签：兔子、开心"
+    handler.local_handle_tool_call.return_value = result
+    llm.side_effect = [
+        {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "recent1", "type": "function", "function": {"name": "local__save_recent_stickers", "arguments": '{}'}}
+        ]}}]},
+        {"choices": [{"message": {"content": ""}}]},
+    ]
+    await handler._handle_group_chat(event, "123", "cat", "把我刚才那一堆图片都存了，自动打标签")
+    context = handler.local_handle_tool_call.await_args.kwargs["context"]
+    assert context["_sticker_request_message_id"] == 88 and context["_user_id"] == "5"
+    assert context["_quoted_message_id"] is None and context["_sticker_user_turn"] is True
+    assert sent.await_args.args[2] == [result]
+    assert load_jsonl_history(path("123", "cat"))[-1]["content"] == result
+
+
 async def test_real_handler_strips_sticker_marker_after_visual_json(group_handler, monkeypatch):
     handler, event, llm, sent, manager, path = group_handler
     runtime = types.ModuleType("plugins.sticker_reply")

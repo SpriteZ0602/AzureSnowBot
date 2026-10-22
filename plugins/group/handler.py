@@ -156,6 +156,7 @@ async def _handle_group_chat(
         "_sender_name": sender,
         "_persona": active_persona,
         "_quoted_message_id": reply_id,
+        "_sticker_request_message_id": event.message_id,
         "_quoted_sticker_urls": [image.url for image in quoted_images],
         # 仅当前群用户对话提供此标记，用户意图由 Agent 决定，不做用词匹配。
         "_sticker_user_turn": True,
@@ -317,7 +318,7 @@ async def _handle_group_chat(
                     else:
                         tool_result = await call_tool(fn_name, fn_args)
 
-                if fn_name in ("local__save_quoted_sticker", "local__delete_quoted_sticker"):
+                if fn_name in ("local__save_quoted_sticker", "local__delete_quoted_sticker", "local__save_recent_stickers"):
                     sticker_results.append(tool_result)
 
                 from ..tool_log import log_tool_call

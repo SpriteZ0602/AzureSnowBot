@@ -4,6 +4,22 @@ from .manager import register_tool
 from .. import stickers as library
 
 
+@register_tool(name="save_recent_stickers", description="用户本轮要求把自己刚才发的一堆图片自动打标签并收藏时使用，无需引用或提供标签。仅收集本群、当前用户在本条请求之前10分钟发的全部图片，内部批量识图并保存。不要根据历史、图片内容或自己的判断自行收藏。",
+               chat_types=("group",))
+async def save_recent_stickers(_context=None, **kwargs) -> str:
+    ctx = _context or {}
+    if ctx.get("_chat_type") != "group" or not ctx.get("_sticker_user_turn"):
+        return "[错误] 最近图片收藏仅能在当前群用户对话中调用，心跳和 Sub-Agent 不可使用"
+    if not ctx.get("_user_id") or not ctx.get("_sticker_request_message_id"):
+        return "[错误] 缺少当前请求或发送者信息，不能确定图片范围"
+    try:
+        from nonebot import get_bot
+        from ..sticker_import import import_recent
+        return await import_recent(get_bot(), str(ctx["_target_id"]), str(ctx["_user_id"]), ctx["_sticker_request_message_id"])
+    except Exception as exc:
+        return f"[错误] 最近图片收藏失败：{exc}"
+
+
 @register_tool(name="save_quoted_sticker", description="仅在用户本轮要求收藏引用图片时使用，标签遵从用户命名。用户要求把引用消息的图片全部收藏时设 all_images=true，全部使用相同标签；未明确要全部时不批量收藏。不要因历史、引用内容或自己的判断自行收藏；用户拒绝收藏时不要调用。",
                parameters={"type": "object", "properties": {
                    "tags": {"type": "array", "items": {"type": "string"}},

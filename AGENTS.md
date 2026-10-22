@@ -143,6 +143,8 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 - 图库由 `plugins/stickers.py` 管理，保存在 `data/stickers/<gid>/index.json` 与 `images/`；按群隔离、同群人格共用。每群 200 张、全库 5,000,000,000 字节，无每群容量或单图字节上限；GIF 原样保存，收藏不自动过期。
 - 自然语言引用收藏/删除使用 `save_quoted_sticker` / `delete_quoted_sticker`。是否收藏、删除或明确索图由 Agent 理解本轮用户意图，不使用关键词正则再次判断。工具仅接受群用户主对话提供的 `_sticker_user_turn` 与引用上下文，校验引用、群隔离和配额；心跳不提供该标记，Sub-Agent 不继承。
 - 收藏工具默认单图；用户要求全部收藏时由 Agent 传 `all_images=true`，重新读取原消息全部图片并统一标签，最多 200 张，不受 LLM 识图四张上限影响。逐张下载、去重和提交，报告新增/重复/失败/未处理数；图库已满或文件写入失败时停止，保留已完成收藏。解析截断或图片源不全时拒绝开始批量收藏，避免把部分结果误称为全部。
+- 无需引用的 `save_recent_stickers` 调用 `plugins/sticker_import.py`：以本条请求的 QQ 消息 ID 为边界，只读取本群、当前发送者此前 10 分钟的全部图片消息，拒绝跨群/跨用户或无来源记录的操作。`chatlog_db` 自动补 `message_id` 列并更新去重索引，旧记录不补造 ID；旁路记录器不依赖全量监听开关。
+- 最近图片收藏每批最多四张 JPEG 预览走统一 `call_llm(source="sticker_tagging")` 自动标注，GIF 使用前三帧预览但保存原文件。严格校验序号、识别状态、标签和描述，不能识别的不保存；优先复用已有标签，重复文件不再识图。下载临时文件仅在明确收藏时创建，完成或失败即清理，预览/Base64 不进入主对话历史或管理日志。保留现有数量/全局容量限制，结果明确统计成功、复用、失败和未处理项。
 - 群内 `/表情列表` 按标签分批合并转发（每批最多 20 图、请求目标 8 MiB，单张图片本身超过该大小时独立成批），Admin 私聊 `/自动表情 <群号> on|off` 设置群配置 `auto_stickers`（默认 true）。只提供这两个新增指令。
 - 工具可设置 `@register_tool(chat_types=("group",))` 限制会话类型，分发时同时校验。
 - `plugins/sticker_reply.py` 每轮读取完整标签目录，放入末尾独立 system 上下文；鼓励闲聊、接梗和表达情绪时主动配图，优先使用末行 `[[sticker:标签]]` 选择一个已有标签，多标签仍按交集匹配。每次完整回复最多一张，无发送冷却，旧索引的 `last_auto_at` 字段不再参与判断。标记不进入正文/历史；发送前仍检查自动配图开关，关闭后自然语言明确索图仍可使用 `request_sticker`。
@@ -274,7 +276,7 @@ spec.loader.exec_module(mod)
 
 - **记录器**: `plugins/group/chatlog.py`（nonebot 旁路，白名单群所有消息）
 - **存储**: `plugins/group/chatlog_db.py` → `data/sessions/chatlog.db`（SQLite，
-  `(group_id, ts)` 索引；`UNIQUE(group_id, ts, uid, text)` 保证迁移幂等）。
+  `(group_id, ts)` 索引；`UNIQUE(group_id, ts, uid, text, message_id)` 保证迁移幂等，有 QQ ID 的新消息另按群号和消息 ID 去重）。
   保留期 `RETENTION_DAYS = 365`，bot 启动时自动清理（`@driver.on_startup`）
 - **检索**: `get_group_chat_log` 工具（`tools.py`，按发送者/QQ号/关键词/时间窗）；
   chatter、`/查记录` 指令、Dashboard 共用 `chatlog_db.load_chatlog()`，

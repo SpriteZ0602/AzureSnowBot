@@ -13,16 +13,17 @@ data/sessions/chatlog.db
 本模块不依赖 nonebot，可被 scripts/migrate_chatlog_to_db.py 独立加载。
 
 表结构:
-    messages(id, group_id, ts, uid, name, text)
-    UNIQUE(group_id, ts, uid, text)：
+    messages(id, group_id, ts, uid, name, text, message_id)
+    UNIQUE(group_id, ts, uid, text, message_id)：
     - 迁移脚本重复执行幂等（INSERT OR IGNORE）；
-    - 副作用：同一秒内完全相同的消息只存一条，对检索无影响。
+    - 有 QQ ID 的新消息另按 (group_id, message_id) 去重；旧库自动补列，旧记录 ID 留空。
 """
 
 import json
 import sqlite3
 import time
 from pathlib import Path
+from threading import RLock
 
 # 项目根目录（plugins/group/chatlog_db.py → 上两级），与 CWD 无关
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +31,7 @@ DB_PATH = ROOT / "data" / "sessions" / "chatlog.db"
 
 # 保留天数，超过的记录在 bot 启动时清理（旧 JSONL 时代是 7 天）
 RETENTION_DAYS = 365
+_schema_lock = RLock()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -38,12 +40,11 @@ CREATE TABLE IF NOT EXISTS messages (
     ts       INTEGER NOT NULL,
     uid      TEXT NOT NULL DEFAULT '',
     name     TEXT NOT NULL DEFAULT '',
-    text     TEXT NOT NULL DEFAULT ''
+    text     TEXT NOT NULL DEFAULT '',
+    message_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_messages_group_ts ON messages(group_id, ts);
 CREATE INDEX IF NOT EXISTS idx_messages_group_uid ON messages(group_id, uid);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_dedupe
-    ON messages(group_id, ts, uid, text);
 """
 
 
@@ -52,20 +53,28 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=5)
     conn.execute("PRAGMA busy_timeout=5000")
     # 建表语句幂等（IF NOT EXISTS），每次连接执行的开销可忽略
-    conn.executescript(_SCHEMA)
+    with _schema_lock:
+        conn.executescript(_SCHEMA)
+        if "message_id" not in {row[1] for row in conn.execute("PRAGMA table_info(messages)")}:
+            conn.execute("ALTER TABLE messages ADD COLUMN message_id TEXT NOT NULL DEFAULT ''")
+        columns = [row[2] for row in conn.execute("PRAGMA index_info(idx_messages_dedupe)")]
+        if columns and "message_id" not in columns:
+            conn.execute("DROP INDEX idx_messages_dedupe")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_dedupe ON messages(group_id, ts, uid, text, message_id)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_qq_id ON messages(group_id, message_id) WHERE message_id <> ''")
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
 # ──────────────────── 写入 ────────────────────
 
-def append_chatlog(group_id: str, user_id: str, nickname: str, text: str) -> None:
+def append_chatlog(group_id: str, user_id: str, nickname: str, text: str, *, message_id=None) -> None:
     """追加一条群聊记录"""
     conn = _connect()
     try:
         conn.execute(
-            "INSERT OR IGNORE INTO messages(group_id, ts, uid, name, text) VALUES (?,?,?,?,?)",
-            (str(group_id), int(time.time()), str(user_id), str(nickname), str(text)),
+            "INSERT OR IGNORE INTO messages(group_id, ts, uid, name, text, message_id) VALUES (?,?,?,?,?,?)",
+            (str(group_id), int(time.time()), str(user_id), str(nickname), str(text), str(message_id) if message_id is not None else ""),
         )
         conn.commit()
     finally:
@@ -120,6 +129,26 @@ def load_chatlog(
 
     rows.reverse()
     return [{"ts": r[0], "uid": r[1], "name": r[2], "text": r[3]} for r in rows]
+
+
+# ──────────────────── 最近图片来源 ────────────────────
+
+def recent_image_messages(group_id: str, user_id: str, request_message_id) -> list[dict]:
+    """以当前用户请求为边界，仅取同群同人此前十分钟的图片消息。"""
+    conn = _connect()
+    try:
+        anchor = conn.execute("SELECT id,ts FROM messages WHERE group_id=? AND uid=? AND message_id=?",
+                              (str(group_id), str(user_id), str(request_message_id))).fetchone()
+        if anchor is None:
+            raise ValueError("找不到当前请求的消息记录；请在更新 Bot 后发送图片，再 @Bot 请求收藏")
+        rows = conn.execute(
+            "SELECT message_id,ts FROM messages WHERE group_id=? AND uid=? AND id<? AND ts>=? "
+            "AND message_id<>'' AND instr(text,'[图片 img_')>0 ORDER BY id DESC LIMIT 201",
+            (str(group_id), str(user_id), anchor[0], anchor[1] - 600),
+        ).fetchall()
+        return [{"message_id": row[0], "ts": row[1]} for row in reversed(rows)]
+    finally:
+        conn.close()
 
 
 # ──────────────────── 清理过期记录 ────────────────────
