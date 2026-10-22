@@ -7,6 +7,7 @@ import json
 import os
 import re
 import random
+import shutil
 import tempfile
 import time
 import uuid
@@ -18,8 +19,6 @@ import httpx
 ROOT = Path("data/stickers")
 MAX_COUNT = 200
 MAX_TOTAL_BYTES = 5_000_000_000
-MAX_IMAGE_BYTES = 2 * 1024 * 1024
-MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
 MAX_TAGS = 64
 MAX_ITEM_TAGS = 5
 TAG_LENGTH = 16
@@ -120,24 +119,20 @@ def read_image(gid: str, sticker_id: str) -> tuple[dict, bytes]:
         return item, image_path(gid, item).read_bytes()
 
 
-def _prepare(raw: bytes) -> tuple[bytes, str, str]:
+def _prepare(raw: bytes | Path) -> tuple[bytes | Path, str, str]:
     from PIL import Image, ImageOps, UnidentifiedImageError
-    if not raw or len(raw) > MAX_DOWNLOAD_BYTES:
-        raise StickerError("图片下载大小超过 8 MiB")
+    source = raw if isinstance(raw, Path) else io.BytesIO(raw)
     try:
-        with Image.open(io.BytesIO(raw)) as image:
+        with Image.open(source) as image:
             fmt = image.format
             if fmt not in ("GIF", "JPEG", "PNG", "WEBP") or image.width * image.height > 20_000_000:
                 raise StickerError("图片格式不支持或尺寸过大")
             image.verify()
         if fmt == "GIF":
-            if len(raw) > MAX_IMAGE_BYTES:
-                raise StickerError("GIF 超过 2 MiB，未压缩以保留动画")
             return raw, "gif", "image/gif"
-        with Image.open(io.BytesIO(raw)) as image:
+        source = raw if isinstance(raw, Path) else io.BytesIO(raw)
+        with Image.open(source) as image:
             if getattr(image, "is_animated", False):
-                if len(raw) > MAX_IMAGE_BYTES:
-                    raise StickerError("动画图片超过 2 MiB")
                 ext = "webp" if fmt == "WEBP" else "png"
                 return raw, ext, f"image/{ext}"
             image = ImageOps.exif_transpose(image)
@@ -149,10 +144,7 @@ def _prepare(raw: bytes) -> tuple[bytes, str, str]:
             else:
                 image.convert("RGB").save(out, format="JPEG", quality=85, optimize=True)
                 ext, mime = "jpg", "image/jpeg"
-            content = out.getvalue()
-            if len(content) > MAX_IMAGE_BYTES:
-                raise StickerError("图片压缩后仍超过 2 MiB")
-            return content, ext, mime
+            return out.getvalue(), ext, mime
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError, SyntaxError) as exc:
         raise StickerError("图片损坏或不是支持的图片格式") from exc
 
@@ -163,10 +155,18 @@ def _check_tags(data: dict, tags: list[str], exclude: str = "") -> None:
         raise StickerError(f"本群最多 {MAX_TAGS} 个不同标签，请先整理标签")
 
 
-def add(gid: str, raw: bytes, tags: list[str], uploader: str = "", description: str = "") -> tuple[dict, bool]:
+def add(gid: str, raw: bytes | Path, tags: list[str], uploader: str = "", description: str = "") -> tuple[dict, bool]:
     tags = normalize_tags(tags)
     content, ext, mime = _prepare(raw)
-    digest = hashlib.sha256(raw).hexdigest()
+    if isinstance(raw, Path):
+        hasher = hashlib.sha256()
+        with raw.open("rb") as file:
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        digest = hasher.hexdigest()
+    else:
+        digest = hashlib.sha256(raw).hexdigest()
+    size = content.stat().st_size if isinstance(content, Path) else len(content)
     with _lock:
         data = _load(gid)
         existing = next((i for i in data["items"] if i["hash"] == digest), None)
@@ -179,19 +179,23 @@ def add(gid: str, raw: bytes, tags: list[str], uploader: str = "", description: 
         if len(data["items"]) >= MAX_COUNT:
             raise StickerLimitError(f"本群已有 {MAX_COUNT} 张表情，请先删除再收藏")
         _check_tags(data, tags)
-        if total_bytes() + len(content) > MAX_TOTAL_BYTES:
+        if total_bytes() + size > MAX_TOTAL_BYTES:
             raise StickerLimitError("所有群图库已达到 5 GB 上限，请先清理")
         directory = group_dir(gid) / "images"
         directory.mkdir(parents=True, exist_ok=True)
         item = {"id": uuid.uuid4().hex, "hash": digest, "file": f"{digest}.{ext}", "mime": mime,
                 "tags": tags, "description": str(description)[:300], "uploader": str(uploader),
-                "size": len(content), "created_at": time.time(), "last_used_at": None}
+                "size": size, "created_at": time.time(), "last_used_at": None}
         path = image_path(gid, item)
         fd, name = tempfile.mkstemp(prefix=".image-", suffix=".tmp", dir=directory)
         temp = Path(name)
         try:
             with os.fdopen(fd, "wb") as file:
-                file.write(content)
+                if isinstance(content, Path):
+                    with content.open("rb") as source_file:
+                        shutil.copyfileobj(source_file, file, length=1024 * 1024)
+                else:
+                    file.write(content)
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(temp, path)
@@ -212,16 +216,35 @@ async def collect(gid: str, url: str, tags: list[str], uploader: str = "", descr
     if parsed.scheme not in ("https", "http") or not parsed.host:
         raise StickerError("引用图片没有可下载的 HTTP 地址，请重新发送图片")
     async with _downloads:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                chunks, size = [], 0
-                async for chunk in response.aiter_bytes():
-                    size += len(chunk)
-                    if size > MAX_DOWNLOAD_BYTES:
-                        raise StickerError("图片下载超过 8 MiB，已停止")
-                    chunks.append(chunk)
-        return await asyncio.to_thread(add, gid, b"".join(chunks), tags, uploader, description)
+        directory = group_dir(gid)
+        directory.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix=".download-", suffix=".tmp", dir=directory)
+        temp = Path(name)
+        try:
+            with os.fdopen(fd, "wb") as file:
+                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                    async with client.stream("GET", url) as response:
+                        response.raise_for_status()
+                        size = 0
+                        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                            size += len(chunk)
+                            if size > MAX_TOTAL_BYTES:
+                                raise StickerLimitError("图片下载已超过全库容量上限，已停止")
+                            file.write(chunk)
+                file.flush()
+                os.fsync(file.fileno())
+            task = asyncio.create_task(asyncio.to_thread(add, gid, temp, tags, uploader, description))
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # 文件仍由工作线程使用时，先等线程退出再清理临时文件。
+                try:
+                    await task
+                except Exception:
+                    pass
+                raise
+        finally:
+            temp.unlink(missing_ok=True)
 
 
 def update_tags(gid: str, sticker_id: str, tags: list[str]) -> dict:

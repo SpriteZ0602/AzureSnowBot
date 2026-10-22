@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import random
 import sys
 import time
 import types
@@ -124,10 +125,34 @@ def test_bad_images_leave_no_files(lib, raw):
     assert not lib.ROOT.exists()
 
 
-def test_gif_over_limit_is_rejected_not_flattened(lib, monkeypatch):
-    monkeypatch.setattr(lib, "MAX_IMAGE_BYTES", 1)
-    with pytest.raises(lib.StickerError, match="GIF"):
-        lib.add("123", picture(animated=True), ["猫"])
+@pytest.fixture(scope="module")
+def large_gif():
+    rng = random.Random(42)
+    frames = []
+    for _ in range(7):
+        frame = Image.frombytes("P", (1024, 1024), rng.randbytes(1024 * 1024))
+        frame.putpalette([value for value in range(256) for _ in range(3)])
+        frames.append(frame)
+    out = io.BytesIO()
+    frames[0].save(out, format="GIF", save_all=True, append_images=frames[1:], duration=80, loop=0, optimize=False)
+    raw = out.getvalue()
+    assert len(raw) > 8 * 1024 * 1024
+    return raw
+
+
+@pytest.mark.asyncio
+async def test_large_gif_download_preserves_original_and_cleans_temp_files(lib, monkeypatch, large_gif):
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(lib.httpx, "AsyncClient", lambda **kw: client_class(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, content=large_gif)), **kw))
+    item, created = await lib.collect("123", "https://qq.example/large.gif", ["兔子"])
+    assert created and item["size"] == len(large_gif)
+    assert lib.read_image("123", item["id"])[1] == large_gif
+    assert Image.open(lib.image_path("123", item)).n_frames == 7
+    assert not list(lib.ROOT.rglob("*.tmp"))
+    duplicate, created = lib.add("123", large_gif, ["开心"])
+    assert not created and duplicate["id"] == item["id"]
+    assert lib.total_bytes() == len(large_gif)
 
 
 def test_cleanup_keeps_old_collection_but_removes_orphans(lib):
@@ -144,14 +169,33 @@ def test_cleanup_keeps_old_collection_but_removes_orphans(lib):
 
 
 @pytest.mark.asyncio
-async def test_download_limit_stops_before_writing(lib, monkeypatch):
+async def test_download_stops_at_global_budget_and_cleans_temp_files(lib, monkeypatch):
     client_class = httpx.AsyncClient
-    monkeypatch.setattr(lib, "MAX_DOWNLOAD_BYTES", 10)
+    monkeypatch.setattr(lib, "MAX_TOTAL_BYTES", 10)
     monkeypatch.setattr(lib.httpx, "AsyncClient", lambda **kw: client_class(
         transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"x" * 11)), **kw))
-    with pytest.raises(lib.StickerError, match="下载超过"):
+    with pytest.raises(lib.StickerLimitError, match="全库容量上限"):
         await lib.collect("123", "https://qq.example/image", ["猫"])
-    assert not lib.ROOT.exists()
+    assert not list(lib.ROOT.rglob("*.tmp"))
+    assert lib.items("123") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["network", "invalid", "index"])
+async def test_download_failures_leave_no_temp_or_unindexed_images(lib, monkeypatch, failure):
+    client_class = httpx.AsyncClient
+    def response(request):
+        if failure == "network":
+            raise httpx.ReadError("connection lost")
+        return httpx.Response(200, content=b"not an image" if failure == "invalid" else picture(animated=True))
+    monkeypatch.setattr(lib.httpx, "AsyncClient", lambda **kw: client_class(transport=httpx.MockTransport(response), **kw))
+    if failure == "index":
+        monkeypatch.setattr(lib, "_save", MagicMock(side_effect=OSError("full")))
+    with pytest.raises((httpx.ReadError, lib.StickerError, OSError)):
+        await lib.collect("123", "https://qq.example/image", ["猫"])
+    assert not list(lib.ROOT.rglob("*.tmp"))
+    assert not list(lib.ROOT.rglob("*.gif"))
+    assert lib.items("123") == []
 
 
 @pytest.fixture
@@ -334,6 +378,17 @@ def test_list_repeats_multitag_images_and_preserves_gif(commands, lib, monkeypat
         assert len(json.dumps(batch).encode()) < commands.MAX_BATCH_BYTES
     raw_images = [base64.b64decode(node["data"]["content"][-1]["data"]["file"].split("//", 1)[1]) for batch in batches for node in batch]
     assert raw_images.count(gif) == 2
+
+
+def test_list_places_large_gif_in_its_own_batch(commands, lib, large_gif):
+    lib.add("123", picture(), ["兔子"])
+    lib.add("123", large_gif, ["兔子"])
+    lib.add("123", picture("green"), ["兔子"])
+    batches = list(commands.list_batches("123", 99, "Bot"))
+    assert len(batches) == 3 and all(len(batch) == 1 for batch in batches)
+    assert len(json.dumps(batches[1]).encode()) > commands.MAX_BATCH_BYTES
+    encoded = batches[1][0]["data"]["content"][-1]["data"]["file"].split("//", 1)[1]
+    assert base64.b64decode(encoded) == large_gif
 
 
 @pytest.mark.asyncio

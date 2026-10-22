@@ -140,15 +140,15 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 
 ### 群表情包收藏
 
-- 图库由 `plugins/stickers.py` 管理，保存在 `data/stickers/<gid>/index.json` 与 `images/`；按群隔离、同群人格共用。每群 200 张、全库 5,000,000,000 字节、单张 2 MiB，无每群容量限制；GIF 原样保存，收藏不自动过期。
+- 图库由 `plugins/stickers.py` 管理，保存在 `data/stickers/<gid>/index.json` 与 `images/`；按群隔离、同群人格共用。每群 200 张、全库 5,000,000,000 字节，无每群容量或单图字节上限；GIF 原样保存，收藏不自动过期。
 - 自然语言引用收藏/删除使用 `save_quoted_sticker` / `delete_quoted_sticker`。是否收藏、删除或明确索图由 Agent 理解本轮用户意图，不使用关键词正则再次判断。工具仅接受群用户主对话提供的 `_sticker_user_turn` 与引用上下文，校验引用、群隔离和配额；心跳不提供该标记，Sub-Agent 不继承。
 - 收藏工具默认单图；用户要求全部收藏时由 Agent 传 `all_images=true`，重新读取原消息全部图片并统一标签，最多 200 张，不受 LLM 识图四张上限影响。逐张下载、去重和提交，报告新增/重复/失败/未处理数；图库已满或文件写入失败时停止，保留已完成收藏。解析截断或图片源不全时拒绝开始批量收藏，避免把部分结果误称为全部。
-- 群内 `/表情列表` 按标签分批合并转发（20 图/8 MiB），Admin 私聊 `/自动表情 <群号> on|off` 设置群配置 `auto_stickers`（默认 true）。只提供这两个新增指令。
+- 群内 `/表情列表` 按标签分批合并转发（每批最多 20 图、请求目标 8 MiB，单张图片本身超过该大小时独立成批），Admin 私聊 `/自动表情 <群号> on|off` 设置群配置 `auto_stickers`（默认 true）。只提供这两个新增指令。
 - 工具可设置 `@register_tool(chat_types=("group",))` 限制会话类型，分发时同时校验。
 - `plugins/sticker_reply.py` 每轮读取完整标签目录，放入末尾独立 system 上下文；鼓励闲聊、接梗和表达情绪时主动配图，优先使用末行 `[[sticker:标签]]` 选择一个已有标签，多标签仍按交集匹配。每次完整回复最多一张，无发送冷却，旧索引的 `last_auto_at` 字段不再参与判断。标记不进入正文/历史；发送前仍检查自动配图开关，关闭后自然语言明确索图仍可使用 `request_sticker`。
 - 群主对话、心跳、定时任务和插话共用发送附件。`send_chunked` / `send_chunked_raw` 接受可选 `sticker`、`persona`，`SendResult.sticker_result` 区分图片状态。文字和图片在同一发送锁内完成；图片单独发送并在 chatlog.db 中保存收藏 ID 关联，便于引用删除。失败/未知状态不会记成成功或自动重发。
 - Dashboard 路由 `plugins/dashboard/routes/stickers.py` 复用同一图库服务；`/api/v1/stickers` 的查询、图片和修改接口均受 JWT 认证保护。前端 `Stickers.vue` 配合 `StickerImage.vue` 使用鉴权 Blob 请求懒加载图片，不在图片 URL 中携带 Token。
-- 每群最多 64 个不同标签，每张最多 5 个、每个最多 16 字。下载上限 8 MiB，保存后上限 2 MiB；静态图片缩放压缩，GIF 不重编码。启动及每小时回收超过 24 小时的临时/孤立文件，已收藏图片不自动过期。
+- 每群最多 64 个不同标签，每张最多 5 个、每个最多 16 字。下载流式落临时文件，以全库容量作为下载边界，最终写入时在锁内重新检查全库配额；不把整张 GIF 缓存在内存中。静态图片缩放压缩，GIF 不重编码。下载失败或完成后清理临时文件，启动及每小时回收超过 24 小时的孤立临时文件，已收藏图片不自动过期。
 - 部署需安装 `Pillow>=12.0,<14`，在 `web/` 执行 `npm ci`、`npm run build` 后重启 Bot；无需历史迁移或新增环境变量。前端构建分别检查 SPA 和 Vite 配置的类型。
 
 ### 消息分条发送（Chunker）
