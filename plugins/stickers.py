@@ -283,17 +283,6 @@ def set_enabled(gid: str, value: bool) -> None:
         _save_group_config(gid, cfg)
 
 
-def request_permissions(text: str, quoted_id=None) -> dict:
-    """能力只从当前用户文字建立；引用内容和模型参数不授予修改权限。"""
-    denied = bool(re.search(r"不要|别再|别把|不许|不用|无需|不想|勿", text))
-    return {
-        "_sticker_save_allowed": bool(quoted_id and not denied and re.search(r"收藏|存成|存为|保存|存下|收录|记成", text)),
-        "_sticker_delete_allowed": bool(quoted_id and not denied and re.search(r"删除|删掉|删了|移除", text)),
-        "_sticker_explicit_allowed": bool(not denied and re.search(
-            r"(?:发|来|给|找|想看|看看|要).{0,24}(?:表情|图片|动图|张)|(?:表情|图片|动图).{0,16}(?:发|来|给|找|要)", text)),
-    }
-
-
 def select(gid: str, tags: list[str], *, automatic: bool = False) -> dict | None:
     tags = normalize_tags(tags)
     with _lock:

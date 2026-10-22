@@ -141,7 +141,7 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 ### 群表情包收藏
 
 - 图库由 `plugins/stickers.py` 管理，保存在 `data/stickers/<gid>/index.json` 与 `images/`；按群隔离、同群人格共用。每群 200 张、全库 5,000,000,000 字节、单张 2 MiB，无每群容量限制；GIF 原样保存，收藏不自动过期。
-- 自然语言引用收藏/删除使用 `save_quoted_sticker` / `delete_quoted_sticker`，权限来自当前用户文字及 handler 的引用上下文，Sub-Agent 不继承修改权限。
+- 自然语言引用收藏/删除使用 `save_quoted_sticker` / `delete_quoted_sticker`。是否收藏、删除或明确索图由 Agent 理解本轮用户意图，不使用关键词正则再次判断。工具仅接受群用户主对话提供的 `_sticker_user_turn` 与引用上下文，校验引用、单图、群隔离和配额；心跳不提供该标记，Sub-Agent 不继承。
 - 群内 `/表情列表` 按标签分批合并转发（20 图/8 MiB），Admin 私聊 `/自动表情 <群号> on|off` 设置群配置 `auto_stickers`（默认 true）。只提供这两个新增指令。
 - 工具可设置 `@register_tool(chat_types=("group",))` 限制会话类型，分发时同时校验。
 - `plugins/sticker_reply.py` 每轮读取完整标签目录，放入末尾独立 system 上下文；最终回复末行 `[[sticker:标签1,标签2]]` 按标签交集选一张。标记不进入正文/历史；自动冷却 60 秒，Admin 关闭自动配图后自然语言明确索图仍可使用 `request_sticker`。

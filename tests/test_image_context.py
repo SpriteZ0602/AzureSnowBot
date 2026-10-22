@@ -2,6 +2,7 @@
 
 import copy
 import importlib.util
+import io
 import json
 import sys
 import types
@@ -9,6 +10,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import httpx
+from PIL import Image
 
 sys.modules.setdefault("nonebot", MagicMock())
 sys.modules.setdefault("nonebot.log", MagicMock(logger=MagicMock()))
@@ -241,6 +244,64 @@ async def test_real_handler_tool_round_does_not_send_raw_json(group_handler):
     saved = load_jsonl_history(path("123", "cat"))
     assert any("【执行记录" in m["content"] and "正位 太阳" in m["content"] for m in saved)
     assert "ABC-731" in saved[0]["content"]
+
+
+@pytest.mark.parametrize("user_request,cached_reference", [
+    ("存一下这个表情包，标签是兔子", False),
+    ("把这张图收入图库，叫兔子", False),
+    ("帮我留着这张，标个兔子", False),
+    ("存一下这个表情包，标签是兔子", True),
+])
+async def test_real_handler_collects_quote_through_tool_without_keyword_gate(group_handler, monkeypatch, tmp_path, user_request, cached_reference):
+    handler, event, llm, sent, _, path = group_handler
+    def load_module(name, relative):
+        spec = importlib.util.spec_from_file_location(name, ROOT / relative)
+        value = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, name, value)
+        spec.loader.exec_module(value)
+        return value
+    dispatcher = load_module("plugins.local_tools.manager", "plugins/local_tools/manager.py")
+    tools = load_module("plugins.local_tools.stickers_quote_test", "plugins/local_tools/stickers.py")
+    library = tools.library
+    monkeypatch.setattr(library, "ROOT", tmp_path / "stickers")
+    monkeypatch.setattr(handler, "local_openai_tools", dispatcher.get_openai_tools)
+    monkeypatch.setattr(handler, "local_handle_tool_call", dispatcher.handle_tool_call)
+    content = io.BytesIO()
+    Image.new("RGB", (20, 20), "white").save(content, format="PNG")
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client_class(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, content=content.getvalue())), **kw))
+    bot = sys.modules["nonebot"].get_bot()
+    if cached_reference:
+        store.put_context("123", "qq:77", {"text": "原图文字笔记", "images": [], "author": "Alice"}, kind="outgoing")
+        bot.get_msg.return_value = {"message": event.reply.message, "sender": {"nickname": "Alice"}}
+    count = 0
+    async def answer(messages, **kwargs):
+        nonlocal count
+        count += 1
+        assert user_request in str(messages)
+        if count == 1:
+            assert any(isinstance(m.get("content"), list) for m in messages) is not cached_reference
+            assert any(t["function"]["name"] == "local__save_quoted_sticker" for t in kwargs["tools"])
+            return {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "save1", "type": "function", "function": {"name": "local__save_quoted_sticker", "arguments": '{"tags":["兔子"]}'}}
+            ]}}]}
+        result = next(m["content"] for m in messages if m["role"] == "tool")
+        assert "已收藏" in result, result
+        final = "存好了，标签是兔子"
+        if not cached_reference:
+            final = json.dumps({"reply": final, "image_notes": []})
+        return {"choices": [{"message": {"content": final}}]}
+    llm.side_effect = answer
+    await handler._handle_group_chat(event, "123", "cat", user_request)
+    assert llm.await_count == 2 and sent.await_count == 1
+    assert sent.await_args.args[2] == ["存好了，标签是兔子"]
+    item, = library.items("123")
+    assert item["tags"] == ["兔子"] and item["uploader"] == "5"
+    assert library.image_path("123", item).exists()
+    assert library.items("456") == []
+    assert bot.get_msg.await_count == int(cached_reference)
+    assert any("已收藏" in m["content"] and "执行记录" in m["content"] for m in load_jsonl_history(path("123", "cat")))
 
 
 async def test_real_handler_invalid_json_keeps_placeholder(group_handler):

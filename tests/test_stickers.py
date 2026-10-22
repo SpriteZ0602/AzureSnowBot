@@ -143,13 +143,6 @@ def test_cleanup_keeps_old_collection_but_removes_orphans(lib):
     assert path.exists() and not orphan.exists() and not temp.exists()
 
 
-def test_permissions_come_from_current_request_only(lib):
-    assert lib.request_permissions("把这张图片存成开心猫", 77)["_sticker_save_allowed"]
-    assert lib.request_permissions("删除这张表情包", 77)["_sticker_delete_allowed"]
-    assert not any(lib.request_permissions("不要删除这张表情包", 77).values())
-    assert not any(lib.request_permissions("删除这张表情包", None).values())
-
-
 @pytest.mark.asyncio
 async def test_download_limit_stops_before_writing(lib, monkeypatch):
     client_class = httpx.AsyncClient
@@ -173,8 +166,15 @@ def sticker_tools(lib, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_tools_require_user_capability_and_single_quote(sticker_tools, lib):
-    assert "[错误]" in await sticker_tools.save_quoted_sticker(["猫"], _context={"_chat_type": "group"})
-    ctx = {"_chat_type": "group", "_target_id": "123", "_sticker_save_allowed": True,
+    background = {"_chat_type": "group", "_target_id": "123", "_quoted_message_id": 77,
+                  "_quoted_sticker_urls": ["https://a"]}
+    assert "当前群用户对话" in await sticker_tools.save_quoted_sticker(["猫"], _context=background)
+    assert "当前群用户对话" in await sticker_tools.delete_quoted_sticker(_context=background)
+    assert "当前群用户对话" in await sticker_tools.request_sticker(["猫"], _context=background)
+    no_quote = {"_chat_type": "group", "_target_id": "123", "_sticker_user_turn": True}
+    assert "未取得本轮引用消息 ID" in await sticker_tools.save_quoted_sticker(["猫"], _context=no_quote)
+    assert "未取得本轮引用消息 ID" in await sticker_tools.delete_quoted_sticker(_context=no_quote)
+    ctx = {**no_quote, "_quoted_message_id": 77,
            "_quoted_sticker_urls": ["https://a", "https://b"]}
     assert "一张" in await sticker_tools.save_quoted_sticker(["猫"], _context=ctx)
     assert lib.items("123") == []
@@ -186,13 +186,23 @@ async def test_quoted_delete_uses_group_and_message_mapping(sticker_tools, lib, 
     message_store = types.ModuleType("plugins.message_store")
     message_store.get_context = lambda gid, key: {"kind": "sticker", "sticker_id": item["id"]} if gid == "123" and key == "qq:77" else None
     monkeypatch.setitem(sys.modules, "plugins.message_store", message_store)
-    ctx = {"_chat_type": "group", "_target_id": "456", "_quoted_message_id": 77, "_sticker_delete_allowed": True}
+    ctx = {"_chat_type": "group", "_target_id": "456", "_quoted_message_id": 77, "_sticker_user_turn": True}
     assert "无法唯一定位" in await sticker_tools.delete_quoted_sticker(_context=ctx)
     ctx["_target_id"] = "123"
     assert "已删除" in await sticker_tools.delete_quoted_sticker(_context=ctx)
     new, _ = lib.add("123", picture(), ["猫"])
     assert "已经删除" in await sticker_tools.delete_quoted_sticker(_context=ctx)
     assert lib.get("123", new["id"])
+
+
+@pytest.mark.asyncio
+async def test_user_requested_sticker_is_queued_when_automatic_is_off(sticker_tools, lib, monkeypatch):
+    item, _ = lib.add("123", picture(), ["兔子"])
+    monkeypatch.setattr(lib, "enabled", lambda gid: False)
+    ctx = {"_chat_type": "group", "_target_id": "123", "_sticker_user_turn": True}
+    result = await sticker_tools.request_sticker(["兔子"], _context=ctx)
+    assert "尚未发送" in result
+    assert ctx["_requested_sticker"] == item["id"]
 
 
 @pytest.fixture
@@ -321,7 +331,7 @@ async def test_forward_then_gif_records_mapping_and_supports_quoted_delete(sende
     assert mapping["sticker_id"] == item["id"] and mapping["kind"] == "sticker"
     assert store.get_context("456", "qq:501") is None
     assert "已发送" in records[0][1]["content"] and records[0][2] == "cat"
-    ctx = {"_chat_type": "group", "_target_id": "123", "_quoted_message_id": 501, "_sticker_delete_allowed": True}
+    ctx = {"_chat_type": "group", "_target_id": "123", "_quoted_message_id": 501, "_sticker_user_turn": True}
     assert "已删除" in await sticker_tools.delete_quoted_sticker(_context=ctx)
 
 

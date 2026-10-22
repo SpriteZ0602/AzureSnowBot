@@ -437,8 +437,7 @@ async def run_sub_agent(
 
     # 工具调用上下文（继承主 Agent 的上下文）
     tool_context = dict(_context) if _context else {}
-    for capability in ("_sticker_save_allowed", "_sticker_delete_allowed", "_sticker_explicit_allowed"):
-        tool_context.pop(capability, None)
+    tool_context.pop("_sticker_user_turn", None)
     if tool_context.get("_chat_type") == "group" and not tool_context.get("_persona"):
         from ..persona.manager import get_active_persona
         tool_context["_persona"] = get_active_persona(str(tool_context.get("_target_id", "")))
