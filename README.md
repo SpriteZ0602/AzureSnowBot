@@ -467,18 +467,24 @@ Dashboard 的“表情包”页面支持按群、标签筛选、GIF 预览、修
 
 收藏长期保存在 `data/stickers/<群号>/`，每群最多 200 张、全库最多 5 GB（5,000,000,000 字节），不设每群容量上限。单张保存后最多 2 MiB；静态图片会压缩，GIF 超限则拒绝收藏。每群最多 64 个标签，每张最多 5 个，每个最多 16 字。超过一天的临时文件会自动清理，正常收藏不会过期。备份时请同时保留索引和图片目录。
 
-已有服务器更新此功能时，使用运行 Bot 的 Python 解释器安装依赖（服务器不使用 Conda；若命令名为 `python3`，请将下方 `python` 替换为 `python3`）：
+已有服务器使用项目目录下的 `venv` 虚拟环境。在 `/opt/AzureSnowBot` 中更新，并用启动 Bot 的同一个解释器安装依赖：
 
 ```bash
 git pull
-python -m pip install "Pillow>=12.0,<14"
+venv/bin/python -m pip install "Pillow>=12.0,<14"
 cd web
 npm ci
 npm run build
 cd ..
 ```
 
-随后按原有方式重启 Bot。无需新增环境变量，现有聊天记录无需迁移；收藏 ID 和 QQ 发送记录的关联自动保存到现有聊天数据库。
+随后停止原有 Bot 进程，再从项目目录启动：
+
+```bash
+nohup venv/bin/python main.py > bot.log 2>&1 &
+```
+
+无需新增环境变量，现有聊天记录无需迁移；收藏 ID 和 QQ 发送记录的关联自动保存到现有聊天数据库。
 
 ### 添加本地工具
 
