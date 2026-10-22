@@ -233,15 +233,23 @@ async def _handle_group_chat(
 
     # 合并 MCP 工具 + Skill 工具 + 本地工具（群聊过滤 admin_only 工具）
     openai_tools = get_openai_tools() + skill_openai_tools() + local_openai_tools(chat_type="group")
+    sticker_results: list[str] = []
+
+    def sticker_result_reply() -> str:
+        return "\n".join(dict.fromkeys(sticker_results))
 
     def readable_reply(assistant_msg: dict, *, final: bool = False) -> str:
         content = assistant_msg.get("content") or ""
-        if not pending_images:
-            return content.strip()
-        reply, notes = decode_visual_response(content, pending_images)
-        if notes:
-            apply_image_notes(group_id, active_persona, notes)
-        return reply or (FAILURE_REPLY if final else "")
+        if pending_images:
+            reply, notes = decode_visual_response(content, pending_images)
+            if notes:
+                apply_image_notes(group_id, active_persona, notes)
+        else:
+            reply = content.strip()
+        if final and sticker_results and (not reply or reply == FAILURE_REPLY):
+            logger.warning(f"群 {group_id} 最终回复不可用，保留本轮表情工具的实际执行结果")
+            return sticker_result_reply()
+        return reply or (FAILURE_REPLY if final and pending_images else "")
 
     format_kwargs = {"response_format": {"type": "json_object"}} if pending_images else {}
 
@@ -263,10 +271,15 @@ async def _handle_group_chat(
         from ..llm import call_llm
         # ── Agentic Loop ──
         for round_idx in range(MAX_TOOL_ROUNDS):
-            data = await call_llm(messages, tools=openai_tools or None, source="group", **format_kwargs)
-            choice = data["choices"][0]
-            assistant_msg = choice["message"]
-
+            try:
+                data = await call_llm(messages, tools=openai_tools or None, source="group", **format_kwargs)
+                assistant_msg = data["choices"][0]["message"]
+            except Exception:
+                if not sticker_results:
+                    raise
+                logger.warning(f"群 {group_id} 表情工具返回后模型请求失败，直接反馈实际执行结果")
+                await send_final(sticker_result_reply())
+                return
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
                 reply = readable_reply(assistant_msg, final=True)
@@ -304,6 +317,9 @@ async def _handle_group_chat(
                     else:
                         tool_result = await call_tool(fn_name, fn_args)
 
+                if fn_name in ("local__save_quoted_sticker", "local__delete_quoted_sticker"):
+                    sticker_results.append(tool_result)
+
                 from ..tool_log import log_tool_call
                 log_tool_call("group", fn_name, fn_args, tool_result,
                               user_id=str(event.user_id), group_id=group_id)
@@ -322,7 +338,7 @@ async def _handle_group_chat(
             final_data = await call_llm(messages, source="group", **format_kwargs)
             reply = readable_reply(final_data["choices"][0]["message"], final=True)
         except Exception:
-            reply = "（工具调用轮次已达上限，请重新提问）"
+            reply = sticker_result_reply() or "（工具调用轮次已达上限，请重新提问）"
         await send_final(reply)
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")

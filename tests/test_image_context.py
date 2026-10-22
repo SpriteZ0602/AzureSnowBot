@@ -246,13 +246,20 @@ async def test_real_handler_tool_round_does_not_send_raw_json(group_handler):
     assert "ABC-731" in saved[0]["content"]
 
 
-@pytest.mark.parametrize("user_request,cached_reference", [
-    ("存一下这个表情包，标签是兔子", False),
-    ("把这张图收入图库，叫兔子", False),
-    ("帮我留着这张，标个兔子", False),
-    ("存一下这个表情包，标签是兔子", True),
+@pytest.mark.parametrize("user_request,cached_reference,reply_format", [
+    ("存一下这个表情包，标签是兔子", False, "json"),
+    ("把这张图收入图库，叫兔子", False, "json"),
+    ("帮我留着这张，标个兔子", False, "json"),
+    ("存一下这个表情包，标签是兔子", True, "text"),
+    ("存一下这个表情包，标签是兔子", False, "text"),
+    ("存一下这个表情包，标签是兔子", False, "broken"),
+    ("存一下这个表情包，标签是兔子", False, "empty"),
+    ("存一下这个表情包，标签是兔子", False, "failure_reply"),
+    ("存一下这个表情包，标签是兔子", False, "request_failed"),
+    ("存一下这个表情包，标签是兔子", False, "budget_failed"),
+    ("存一下这个表情包，标签是兔子", False, "outside_marker"),
 ])
-async def test_real_handler_collects_quote_through_tool_without_keyword_gate(group_handler, monkeypatch, tmp_path, user_request, cached_reference):
+async def test_real_handler_collects_quote_through_tool_without_keyword_gate(group_handler, monkeypatch, tmp_path, user_request, cached_reference, reply_format):
     handler, event, llm, sent, _, path = group_handler
     def load_module(name, relative):
         spec = importlib.util.spec_from_file_location(name, ROOT / relative)
@@ -266,11 +273,17 @@ async def test_real_handler_collects_quote_through_tool_without_keyword_gate(gro
     monkeypatch.setattr(library, "ROOT", tmp_path / "stickers")
     monkeypatch.setattr(handler, "local_openai_tools", dispatcher.get_openai_tools)
     monkeypatch.setattr(handler, "local_handle_tool_call", dispatcher.handle_tool_call)
+    if reply_format == "budget_failed":
+        monkeypatch.setattr(handler, "MAX_TOOL_ROUNDS", 1)
     content = io.BytesIO()
     Image.new("RGB", (20, 20), "white").save(content, format="PNG")
     client_class = httpx.AsyncClient
+    downloads = []
+    def response(request):
+        downloads.append(request.url)
+        return httpx.Response(200, content=content.getvalue())
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client_class(
-        transport=httpx.MockTransport(lambda r: httpx.Response(200, content=content.getvalue())), **kw))
+        transport=httpx.MockTransport(response), **kw))
     bot = sys.modules["nonebot"].get_bot()
     if cached_reference:
         store.put_context("123", "qq:77", {"text": "原图文字笔记", "images": [], "author": "Alice"}, kind="outgoing")
@@ -289,19 +302,57 @@ async def test_real_handler_collects_quote_through_tool_without_keyword_gate(gro
         result = next(m["content"] for m in messages if m["role"] == "tool")
         assert "已收藏" in result, result
         final = "存好了，标签是兔子"
-        if not cached_reference:
+        if reply_format == "json":
             final = json.dumps({"reply": final, "image_notes": []})
+        elif reply_format == "broken":
+            final = '{"reply":'
+        elif reply_format == "empty":
+            final = '{"image_notes": []}'
+        elif reply_format == "failure_reply":
+            final = json.dumps({"reply": images.FAILURE_REPLY, "image_notes": []})
+        elif reply_format in ("request_failed", "budget_failed"):
+            raise httpx.ReadTimeout("final response timed out")
+        elif reply_format == "outside_marker":
+            final = json.dumps({"reply": final, "image_notes": []}) + "\n[[sticker:兔子]]"
         return {"choices": [{"message": {"content": final}}]}
     llm.side_effect = answer
     await handler._handle_group_chat(event, "123", "cat", user_request)
     assert llm.await_count == 2 and sent.await_count == 1
-    assert sent.await_args.args[2] == ["存好了，标签是兔子"]
+    if reply_format == "json" or cached_reference:
+        assert sent.await_args.args[2] == ["存好了，标签是兔子"]
+    else:
+        reply, = sent.await_args.args[2]
+        assert reply.startswith("已收藏 #") and "兔子" in reply
+        assert images.FAILURE_REPLY not in reply and "image_notes" not in reply
     item, = library.items("123")
     assert item["tags"] == ["兔子"] and item["uploader"] == "5"
     assert library.image_path("123", item).exists()
     assert library.items("456") == []
     assert bot.get_msg.await_count == int(cached_reference)
+    assert len(downloads) == 1
     assert any("已收藏" in m["content"] and "执行记录" in m["content"] for m in load_jsonl_history(path("123", "cat")))
+
+
+@pytest.mark.parametrize("tool_name,result", [
+    ("save_quoted_sticker", "[错误] 收藏失败：图片格式不支持"),
+    ("save_quoted_sticker", "[错误] 批量收藏未全部完成：新收藏 2 张，失败 1 张，未处理 0 张"),
+    ("delete_quoted_sticker", "已删除这张表情包及其全部标签关联"),
+])
+async def test_invalid_visual_reply_preserves_sticker_failures_and_partial_results(group_handler, tool_name, result):
+    handler, event, llm, sent, _, path = group_handler
+    handler.local_handle_tool_call.return_value = result
+    llm.side_effect = [
+        {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "action1", "type": "function", "function": {"name": f"local__{tool_name}", "arguments": '{}'}}
+        ]}}]},
+        {"choices": [{"message": {"content": '{"reply":'}}]},
+    ]
+    await handler._handle_group_chat(event, "123", "cat", "处理这张表情包")
+    assert sent.await_count == 1 and sent.await_args.args[2] == [result]
+    assert handler.local_handle_tool_call.await_count == 1
+    saved = load_jsonl_history(path("123", "cat"))
+    assert saved[-1]["content"] == result
+    assert images.FAILURE_REPLY not in str(saved)
 
 
 async def test_real_handler_invalid_json_keeps_placeholder(group_handler):
@@ -310,6 +361,15 @@ async def test_real_handler_invalid_json_keeps_placeholder(group_handler):
     await handler._handle_group_chat(event, "123", "cat", "看图")
     assert sent.await_args.args[2] == [images.FAILURE_REPLY]
     assert "尚未识别" in load_jsonl_history(path("123", "cat"))[0]["content"]
+
+
+async def test_empty_plain_reply_without_images_does_not_report_vision_failure(group_handler):
+    handler, event, llm, sent, _, path = group_handler
+    event.reply_id, event.reply = None, None
+    llm.return_value = {"choices": [{"message": {"content": ""}}]}
+    await handler._handle_group_chat(event, "123", "cat", "你好")
+    sent.assert_not_awaited()
+    assert images.FAILURE_REPLY not in str(load_jsonl_history(path("123", "cat")))
 
 
 async def test_real_handler_strips_sticker_marker_after_visual_json(group_handler, monkeypatch):
