@@ -467,11 +467,10 @@ Dashboard 的“表情包”页面支持按群、标签筛选、GIF 预览、修
 
 收藏长期保存在 `data/stickers/<群号>/`，每群最多 200 张、全库最多 5 GB（5,000,000,000 字节），不设每群容量上限。单张保存后最多 2 MiB；静态图片会压缩，GIF 超限则拒绝收藏。每群最多 64 个标签，每张最多 5 个，每个最多 16 字。超过一天的临时文件会自动清理，正常收藏不会过期。备份时请同时保留索引和图片目录。
 
-已有服务器更新此功能时：
+已有服务器更新此功能时，使用运行 Bot 的 Python 解释器安装依赖（服务器不使用 Conda；若命令名为 `python3`，请将下方 `python` 替换为 `python3`）：
 
 ```bash
 git pull
-conda activate QQBot
 python -m pip install "Pillow>=12.0,<14"
 cd web
 npm ci

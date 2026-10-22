@@ -9,6 +9,8 @@
 
 基于 **NapCat + NoneBot2** 的 QQ 智能 Agent Bot。Python 3.14，Conda 环境 `QQBot`（`D:\Anaconda\envs\QQBot`）。
 
+以上 Conda 环境仅用于开发机。服务器直接使用 Python，部署时用实际运行 Bot 的解释器执行 `python -m pip install ...`（命令名也可能是 `python3`），不需要激活 Conda。
+
 核心能力：多轮对话、人格系统、MCP/本地工具调用、Skill 渐进式披露、定时提醒、心跳 + 主动发言、对话压缩（Compaction）、记忆管理、Web Dashboard。
 
 ## 技术栈
