@@ -249,14 +249,12 @@ def delete(gid: str, sticker_id: str) -> bool:
         return True
 
 
-def mark_used(gid: str, sticker_id: str, *, automatic: bool = False) -> None:
+def mark_used(gid: str, sticker_id: str) -> None:
     with _lock:
         data = _load(gid)
         item = next((i for i in data["items"] if i["id"] == sticker_id), None)
         if item:
             item["last_used_at"] = time.time()
-            if automatic:
-                data["last_auto_at"] = time.time()
             _save(gid, data)
 
 
@@ -291,7 +289,7 @@ def select(gid: str, tags: list[str], *, automatic: bool = False) -> dict | None
     tags = normalize_tags(tags)
     with _lock:
         data = _load(gid)
-        if automatic and (not enabled(gid) or time.time() - data.get("last_auto_at", 0) < 60):
+        if automatic and not enabled(gid):
             return None
         matches = [i for i in data["items"] if set(tags) <= set(i["tags"]) and image_path(gid, i).is_file()]
         if not matches:
@@ -299,14 +297,3 @@ def select(gid: str, tags: list[str], *, automatic: bool = False) -> dict | None
         oldest = min(i.get("last_used_at") or 0 for i in matches)
         item = random.choice([i for i in matches if (i.get("last_used_at") or 0) == oldest])
         return dict(item, _automatic=automatic)
-
-
-def reserve_auto(gid: str) -> bool:
-    """在发送锁内预留冷却；超时也消耗冷却，避免网络状态未知时重复刷图。"""
-    with _lock:
-        data = _load(gid)
-        if not enabled(gid) or time.time() - data.get("last_auto_at", 0) < 60:
-            return False
-        data["last_auto_at"] = time.time()
-        _save(gid, data)
-        return True

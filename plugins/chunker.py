@@ -226,7 +226,7 @@ async def _send_sticker_unlocked(bot, target_id: int, sticker: dict, persona: st
     gid = str(target_id)
     try:
         item, content = library.read_image(gid, sticker["id"])
-        if sticker.get("_automatic") and not library.reserve_auto(gid):
+        if sticker.get("_automatic") and not library.enabled(gid):
             return None
     except Exception as exc:
         logger.warning(f"发送前表情读取失败: {type(exc).__name__}")

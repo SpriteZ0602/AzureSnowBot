@@ -383,11 +383,14 @@ def test_invalid_and_prelude_markers_do_not_leak_or_execute(runtime):
     assert runtime.split_marker("[[sticker:猫]]\n还有文字") == ("还有文字", None)
 
 
-def test_auto_toggle_cooldown_and_explicit_selection(runtime, lib, monkeypatch):
+def test_auto_has_no_cooldown_and_still_respects_toggle(runtime, lib, monkeypatch):
     item, _ = lib.add("123", picture(), ["猫"])
-    assert lib.reserve_auto("123")
-    assert runtime.prepare("123", "[[sticker:猫]]")[1] is None
-    assert not lib.reserve_auto("123")
+    data = lib._load("123")
+    data["last_auto_at"] = time.time()
+    lib._save("123", data)
+    assert runtime.prepare("123", "[[sticker:猫]]")[1]["id"] == item["id"]
+    lib.mark_used("123", item["id"])
+    assert runtime.prepare("123", "[[sticker:猫]]")[1]["id"] == item["id"]
     monkeypatch.setattr(lib, "enabled", lambda gid: False)
     assert runtime.prepare("123", "[[sticker:猫]]")[1] is None
     assert runtime.prepare("123", "", requested_id=item["id"])[1]["id"] == item["id"]
@@ -444,6 +447,33 @@ async def test_unknown_image_delivery_never_retries_or_claims_success(sender, li
     assert bot.send_group_msg.await_count == 1
     assert "状态未知" in records[0][1]["content"]
     assert store.get_context("123", "qq:501") is None
+
+
+@pytest.mark.asyncio
+async def test_consecutive_automatic_stickers_are_both_sent(sender, lib):
+    mod, bot, event, records, _ = sender
+    lib.add("123", picture(), ["猫"])
+    for _ in range(2):
+        selected = lib.select("123", ["猫"], automatic=True)
+        result = await mod.send_chunked(bot, event, [], sticker=selected, persona="cat")
+        assert result.sticker_result.status == "sent"
+    assert bot.send_group_msg.await_count == 2 and len(records) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("automatic", [True, False])
+async def test_send_rechecks_auto_switch_but_allows_explicit_requests(sender, lib, monkeypatch, automatic):
+    mod, bot, event, _, _ = sender
+    lib.add("123", picture(), ["猫"])
+    selected = lib.select("123", ["猫"], automatic=automatic)
+    monkeypatch.setattr(lib, "enabled", lambda gid: False)
+    result = await mod.send_chunked(bot, event, [], sticker=selected, persona="cat")
+    if automatic:
+        assert result.sticker_result is None
+        bot.send_group_msg.assert_not_awaited()
+    else:
+        assert result.sticker_result.status == "sent"
+        bot.send_group_msg.assert_awaited_once()
 
 
 @pytest.mark.asyncio
