@@ -125,6 +125,8 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 
 **安全边界**：JWT 空值/空白自动随机化，手动密钥至少 32 字节；验证 Token 的账号、类型及必要时间字段。配置 API 的展示值与 `raw` 均脱敏（包括多行密钥及 token），更新拒绝换行注入。Dashboard 文件接口统一使用 `path_security.py` 校验名称、数字群号及解析后的目录边界（包含符号链接），不能把未经验证的参数直接拼进路径。公开访问应使用 HTTPS 反向代理，个人管理优先 SSH 隧道。
 
+**登录初始化**：服务器项目根目录执行 `venv/bin/python scripts/setup_dashboard.py`，默认账号 `admin`、独立随机密码，终端仅显示一次。已有密码需显式加 `--reset` 才覆盖，同时轮换 JWT 密钥；只在 `.env` 原子保存哈希与密钥，其他配置不变，重启后生效。不要在源码、文档或 Bot 日志里记录可用的账号密码；本地 `.env` 不随 push 部署，服务器需要单独初始化。
+
 ### Agentic Loop（工具调用）
 群聊和 Admin 私聊都有完整 Agentic Loop：
 1. 发 LLM 请求（带 tools）

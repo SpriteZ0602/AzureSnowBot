@@ -4,6 +4,7 @@ __pycache__/
 .pytest_tmp*/
 .workbuddy/
 .env
+.dashboard-env-*.tmp
 vendor/
 reference/
 good_persona/

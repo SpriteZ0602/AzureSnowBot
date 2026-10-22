@@ -399,6 +399,18 @@ ADMIN_NUMBER=你的QQ号
 | `DASHBOARD_PASSWORD_HASH` | Dashboard 密码 bcrypt 哈希（留空则拒绝登录） | 空 |
 | `DASHBOARD_SECRET_KEY` | JWT 签名密钥（留空则每次重启随机生成；手动设置至少 32 字节） | 空 |
 
+Dashboard 登录初始化（服务器，在项目根目录运行）：
+
+```bash
+venv/bin/python scripts/setup_dashboard.py
+# 已配置过密码、需要改成新账号密码时：
+venv/bin/python scripts/setup_dashboard.py --reset
+```
+
+默认账号 `admin`，密码随机生成，仅在命令终端显示一次；`.env` 只保存 bcrypt 哈希和独立 JWT 密钥，不把密码提交到 Git。可用 `--username` 指定其他账号；初始化完成后重启 Bot。重置会轮换密钥，旧登录在重启后失效；本机 `.env` 不会随 `git pull` 同步到服务器，服务器需单独执行。开发机把 `venv/bin/python` 替换为当前 Python 解释器。
+
+生产 Dashboard 与 Bot 共用 `PORT`（默认 8082），入口 `/dashboard/`；先构建 `web/dist` 再启动 Bot。保持 `HOST=127.0.0.1` 时，可在自己的电脑运行 `ssh -N -L 18082:127.0.0.1:8082 admin@服务器IP`，然后访问 `http://127.0.0.1:18082/dashboard/`。需要公网访问时配置 HTTPS 反向代理，避免直接暴露 HTTP 管理接口。
+
 2. 配置 Admin 上下文文件（可选，按需编辑）：
 
 ```
