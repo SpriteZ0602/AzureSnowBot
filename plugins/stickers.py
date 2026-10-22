@@ -1,0 +1,290 @@
+"""按群隔离的收藏图库，文件有界、索引原子写入，不依赖 NoneBot 生命周期。"""
+
+import asyncio
+import hashlib
+import io
+import json
+import os
+import re
+import tempfile
+import time
+import uuid
+from pathlib import Path
+from threading import RLock
+
+import httpx
+
+ROOT = Path("data/stickers")
+MAX_COUNT = 200
+MAX_TOTAL_BYTES = 5_000_000_000
+MAX_IMAGE_BYTES = 2 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
+MAX_TAGS = 64
+MAX_ITEM_TAGS = 5
+TAG_LENGTH = 16
+_lock = RLock()
+_downloads = asyncio.Semaphore(2)
+
+
+class StickerError(ValueError):
+    pass
+
+
+def group_dir(gid: str) -> Path:
+    gid = str(gid)
+    if not gid.isascii() or not gid.isdigit():
+        raise StickerError("无效群号")
+    return ROOT / gid
+
+
+def normalize_tags(tags: list[str]) -> list[str]:
+    if not isinstance(tags, list) or not tags or not all(isinstance(t, str) for t in tags):
+        raise StickerError("请提供标签列表")
+    result = list(dict.fromkeys(t.strip() for t in tags))
+    if len(result) > MAX_ITEM_TAGS or any(not t or len(t) > TAG_LENGTH or re.search(r"[\[\]<>\r\n,，、]", t) for t in result):
+        raise StickerError(f"每张最多 {MAX_ITEM_TAGS} 个标签，每个 1–{TAG_LENGTH} 字，不含换行或分隔符")
+    return result
+
+
+def _load(gid: str) -> dict:
+    path = group_dir(gid) / "index.json"
+    if not path.exists():
+        return {"items": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+            raise ValueError()
+        return data
+    except (ValueError, OSError) as exc:
+        raise StickerError("图库索引读取失败，请管理员检查，未覆盖原文件") from exc
+
+
+def _save(gid: str, data: dict) -> None:
+    directory = group_dir(gid)
+    directory.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=".index-", suffix=".tmp", dir=directory)
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temp, directory / "index.json")
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def items(gid: str) -> list[dict]:
+    with _lock:
+        return [dict(item, tags=list(item["tags"])) for item in _load(gid)["items"]]
+
+
+def groups() -> list[str]:
+    return sorted(p.name for p in ROOT.iterdir() if p.is_dir() and p.name.isascii() and p.name.isdigit()) if ROOT.exists() else []
+
+
+def total_bytes() -> int:
+    return sum(p.stat().st_size for gid in groups() for p in (group_dir(gid) / "images").glob("*") if p.is_file())
+
+
+def tag_counts(gid: str) -> dict[str, int]:
+    counts = {}
+    for item in items(gid):
+        for tag in item["tags"]:
+            counts[tag] = counts.get(tag, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def get(gid: str, sticker_id: str) -> dict | None:
+    return next((item for item in items(gid) if item["id"] == sticker_id), None)
+
+
+def image_path(gid: str, item: dict) -> Path:
+    name = item.get("file", "")
+    if not re.fullmatch(r"[a-f0-9]{64}\.(?:gif|png|jpg|webp)", name):
+        raise StickerError("图库文件名无效")
+    return group_dir(gid) / "images" / name
+
+
+def read_image(gid: str, sticker_id: str) -> tuple[dict, bytes]:
+    with _lock:
+        item = get(gid, sticker_id)
+        if not item:
+            raise StickerError("这张表情包已经删除或不属于本群")
+        return item, image_path(gid, item).read_bytes()
+
+
+def _prepare(raw: bytes) -> tuple[bytes, str, str]:
+    from PIL import Image, ImageOps, UnidentifiedImageError
+    if not raw or len(raw) > MAX_DOWNLOAD_BYTES:
+        raise StickerError("图片下载大小超过 8 MiB")
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            fmt = image.format
+            if fmt not in ("GIF", "JPEG", "PNG", "WEBP") or image.width * image.height > 20_000_000:
+                raise StickerError("图片格式不支持或尺寸过大")
+            image.verify()
+        if fmt == "GIF":
+            if len(raw) > MAX_IMAGE_BYTES:
+                raise StickerError("GIF 超过 2 MiB，未压缩以保留动画")
+            return raw, "gif", "image/gif"
+        with Image.open(io.BytesIO(raw)) as image:
+            if getattr(image, "is_animated", False):
+                if len(raw) > MAX_IMAGE_BYTES:
+                    raise StickerError("动画图片超过 2 MiB")
+                ext = "webp" if fmt == "WEBP" else "png"
+                return raw, ext, f"image/{ext}"
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail((1024, 1024))
+            out = io.BytesIO()
+            if "A" in image.getbands() or "transparency" in image.info:
+                image.convert("RGBA").save(out, format="WEBP", quality=85)
+                ext, mime = "webp", "image/webp"
+            else:
+                image.convert("RGB").save(out, format="JPEG", quality=85, optimize=True)
+                ext, mime = "jpg", "image/jpeg"
+            content = out.getvalue()
+            if len(content) > MAX_IMAGE_BYTES:
+                raise StickerError("图片压缩后仍超过 2 MiB")
+            return content, ext, mime
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, SyntaxError) as exc:
+        raise StickerError("图片损坏或不是支持的图片格式") from exc
+
+
+def _check_tags(data: dict, tags: list[str], exclude: str = "") -> None:
+    all_tags = {tag for item in data["items"] if item["id"] != exclude for tag in item["tags"]} | set(tags)
+    if len(all_tags) > MAX_TAGS:
+        raise StickerError(f"本群最多 {MAX_TAGS} 个不同标签，请先整理标签")
+
+
+def add(gid: str, raw: bytes, tags: list[str], uploader: str = "", description: str = "") -> tuple[dict, bool]:
+    tags = normalize_tags(tags)
+    content, ext, mime = _prepare(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    with _lock:
+        data = _load(gid)
+        existing = next((i for i in data["items"] if i["hash"] == digest), None)
+        if existing:
+            merged = normalize_tags(existing["tags"] + tags)
+            _check_tags(data, merged, existing["id"])
+            existing["tags"] = merged
+            _save(gid, data)
+            return dict(existing), False
+        if len(data["items"]) >= MAX_COUNT:
+            raise StickerError(f"本群已有 {MAX_COUNT} 张表情，请先删除再收藏")
+        _check_tags(data, tags)
+        if total_bytes() + len(content) > MAX_TOTAL_BYTES:
+            raise StickerError("所有群图库已达到 5 GB 上限，请先清理")
+        directory = group_dir(gid) / "images"
+        directory.mkdir(parents=True, exist_ok=True)
+        item = {"id": uuid.uuid4().hex, "hash": digest, "file": f"{digest}.{ext}", "mime": mime,
+                "tags": tags, "description": str(description)[:300], "uploader": str(uploader),
+                "size": len(content), "created_at": time.time(), "last_used_at": None}
+        path = image_path(gid, item)
+        fd, name = tempfile.mkstemp(prefix=".image-", suffix=".tmp", dir=directory)
+        temp = Path(name)
+        try:
+            with os.fdopen(fd, "wb") as file:
+                file.write(content)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temp, path)
+            data["items"].append(item)
+            try:
+                _save(gid, data)
+            except Exception:
+                path.unlink(missing_ok=True)
+                raise
+        finally:
+            temp.unlink(missing_ok=True)
+        return dict(item), True
+
+
+async def collect(gid: str, url: str, tags: list[str], uploader: str = "", description: str = "") -> tuple[dict, bool]:
+    normalize_tags(tags)
+    parsed = httpx.URL(url)
+    if parsed.scheme not in ("https", "http") or not parsed.host:
+        raise StickerError("引用图片没有可下载的 HTTP 地址，请重新发送图片")
+    async with _downloads:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                chunks, size = [], 0
+                async for chunk in response.aiter_bytes():
+                    size += len(chunk)
+                    if size > MAX_DOWNLOAD_BYTES:
+                        raise StickerError("图片下载超过 8 MiB，已停止")
+                    chunks.append(chunk)
+        return await asyncio.to_thread(add, gid, b"".join(chunks), tags, uploader, description)
+
+
+def update_tags(gid: str, sticker_id: str, tags: list[str]) -> dict:
+    tags = normalize_tags(tags)
+    with _lock:
+        data = _load(gid)
+        item = next((i for i in data["items"] if i["id"] == sticker_id), None)
+        if not item:
+            raise StickerError("这张表情包已经删除")
+        _check_tags(data, tags, sticker_id)
+        item["tags"] = tags
+        _save(gid, data)
+        return dict(item)
+
+
+def delete(gid: str, sticker_id: str) -> bool:
+    with _lock:
+        data = _load(gid)
+        item = next((i for i in data["items"] if i["id"] == sticker_id), None)
+        if not item:
+            return False
+        data["items"].remove(item)
+        _save(gid, data)
+        image_path(gid, item).unlink(missing_ok=True)
+        return True
+
+
+def mark_used(gid: str, sticker_id: str, *, automatic: bool = False) -> None:
+    with _lock:
+        data = _load(gid)
+        item = next((i for i in data["items"] if i["id"] == sticker_id), None)
+        if item:
+            item["last_used_at"] = time.time()
+            if automatic:
+                data["last_auto_at"] = time.time()
+            _save(gid, data)
+
+
+def cleanup() -> None:
+    """仅回收超过一天的临时/无索引文件，正常收藏没有到期时间。"""
+    with _lock:
+        cutoff = time.time() - 86400
+        for gid in groups():
+            referenced = {i["file"] for i in _load(gid)["items"]}
+            for path in group_dir(gid).rglob("*"):
+                if path.is_file() and path.stat().st_mtime < cutoff and (
+                    path.name.endswith(".tmp") or (path.parent.name == "images" and path.name not in referenced)
+                ):
+                    path.unlink()
+
+
+def enabled(gid: str) -> bool:
+    from .persona.manager import get_group_config
+    return bool(get_group_config(gid).get("auto_stickers", True))
+
+
+def set_enabled(gid: str, value: bool) -> None:
+    from .persona.manager import get_group_config, _save_group_config
+    group_dir(gid)
+    with _lock:
+        cfg = get_group_config(gid)
+        cfg["auto_stickers"] = bool(value)
+        _save_group_config(gid, cfg)
+
+
+def request_permissions(text: str, quoted_id=None) -> dict:
+    """能力只从当前用户文字建立；引用内容和模型参数不授予修改权限。"""
+    denied = bool(re.search(r"不要|别再|别把|不许|不用|无需|不想|勿", text))
+    return {
+        "_sticker_save_allowed": bool(quoted_id and not denied and re.search(r"收藏|存成|存为|保存|存下|收录|记成", text)),
+        "_sticker_delete_allowed": bool(quoted_id and not denied and re.search(r"删除|删掉|删了|移除", text)),
+    }

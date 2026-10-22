@@ -16,6 +16,7 @@ data/admin/SOUL.md
 data/reminders.json
 data/tool_calls.jsonl
 data/tool_calls/
+data/stickers/
 data/admin/token_stats.json
 data/admin/.memory_index.json
 data/admin/memories.jsonl

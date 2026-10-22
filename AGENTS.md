@@ -132,6 +132,13 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 - 本地工具可通过 `@register_tool(history_formatter=...)` 定制摘要；默认短结果完整、长结果截断。MCP/Skill 使用默认摘要。
 - Compaction 必须保留仍相关的执行事实和结果，不能把口头承诺总结成已执行。
 
+### 群表情包收藏
+
+- 图库由 `plugins/stickers.py` 管理，保存在 `data/stickers/<gid>/index.json` 与 `images/`；按群隔离、同群人格共用。每群 200 张、全库 5,000,000,000 字节、单张 2 MiB，无每群容量限制；GIF 原样保存，收藏不自动过期。
+- 自然语言引用收藏/删除使用 `save_quoted_sticker` / `delete_quoted_sticker`，权限来自当前用户文字及 handler 的引用上下文，Sub-Agent 不继承修改权限。
+- 群内 `/表情列表` 按标签分批合并转发（20 图/8 MiB），Admin 私聊 `/自动表情 <群号> on|off` 设置群配置 `auto_stickers`（默认 true）。只提供这两个新增指令。
+- 工具可设置 `@register_tool(chat_types=("group",))` 限制会话类型，分发时同时校验。
+
 ### 消息分条发送（Chunker）
 发送函数返回 `SendResult(status, message_ids)`，`status` 为 `sent/failed/unknown`。
 合并转发明确失败才回退逐条发送；超时等状态不明时不重发。群消息发送成功后把 QQ 消息 ID 与文字关联存入现有 chatlog SQLite。

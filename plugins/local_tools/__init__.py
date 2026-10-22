@@ -7,3 +7,4 @@
 from . import manager as manager  # noqa: F401
 from . import tools as tools      # noqa: F401  触发工具注册
 from . import tarot as tarot      # noqa: F401  触发工具注册
+from . import stickers as stickers  # noqa: F401

@@ -103,6 +103,8 @@ async def _handle_group_chat(
     quoted_images = []
     refresh_images = wants_image_refresh(user_input)
     reply_id = get_reply_id(event)
+    from ..stickers import request_permissions
+    sticker_permissions = request_permissions(user_input, reply_id)
     if reply_id:
         bot = get_bot()
         from ..message_parser import resolve_quoted_message
@@ -111,6 +113,9 @@ async def _handle_group_chat(
                                               refresh=refresh_images)
         quoted_author, quoted_text = quoted.author, quoted.text
         quoted_images = quoted.images
+        if sticker_permissions["_sticker_save_allowed"] and not quoted_images:
+            quoted = await resolve_quoted_message(bot, group_id, reply_id, self_id=str(event.self_id), refresh=True)
+            quoted_images = quoted.images
     else:
         from ..message_parser import MessageResolver, segments
         if any(seg.get("type") == "forward" for seg in segments(event.message)):
@@ -122,7 +127,8 @@ async def _handle_group_chat(
     if known_notes:
         apply_image_notes(group_id, active_persona, known_notes)
     pending_images = [image for image in quoted_images
-                      if SUPPORTS_VISION and image.url and (refresh_images or not cached_note(group_id, image.image_id))]
+                      if SUPPORTS_VISION and image.url and not any(sticker_permissions.values())
+                      and (refresh_images or not cached_note(group_id, image.image_id))]
 
     sender = event.sender.nickname or str(event.user_id)
 
@@ -154,6 +160,9 @@ async def _handle_group_chat(
         "_user_id": str(event.user_id),
         "_sender_name": sender,
         "_persona": active_persona,
+        "_quoted_message_id": reply_id,
+        "_quoted_sticker_urls": [image.url for image in quoted_images],
+        **sticker_permissions,
     }
 
     # 组装用户消息（带发送者标识 + 引用内容）

@@ -429,12 +429,16 @@ async def run_sub_agent(
     # 注入工具链（不给 Skill 和 run_sub_agent，sub-agent 靠 task 指令工作）
     chat_type = (_context or {}).get("_chat_type", "private")
     openai_tools = local_openai_tools(chat_type=chat_type) + mcp_openai_tools()
-    openai_tools = [t for t in openai_tools if t["function"]["name"] != "local__run_sub_agent"]
+    openai_tools = [t for t in openai_tools if t["function"]["name"] not in {
+        "local__run_sub_agent", "local__save_quoted_sticker", "local__delete_quoted_sticker", "local__request_sticker",
+    }]
     if openai_tools:
         payload["tools"] = openai_tools
 
     # 工具调用上下文（继承主 Agent 的上下文）
     tool_context = dict(_context) if _context else {}
+    for capability in ("_sticker_save_allowed", "_sticker_delete_allowed", "_sticker_explicit_allowed"):
+        tool_context.pop(capability, None)
     if tool_context.get("_chat_type") == "group" and not tool_context.get("_persona"):
         from ..persona.manager import get_active_persona
         tool_context["_persona"] = get_active_persona(str(tool_context.get("_target_id", "")))

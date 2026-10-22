@@ -42,6 +42,7 @@ class LocalTool:
     execute: Callable[..., Awaitable[str] | str]
     admin_only: bool = False
     history_formatter: Callable[[dict, str], str] | None = None
+    chat_types: tuple[str, ...] = ("private", "group")
 
 
 # ──────────────────── 全局注册表 ────────────────────
@@ -54,6 +55,7 @@ def register_tool(
     parameters: dict[str, Any] | None = None,
     admin_only: bool = False,
     history_formatter: Callable[[dict, str], str] | None = None,
+    chat_types: tuple[str, ...] = ("private", "group"),
 ) -> Callable:
     """
     工具注册装饰器。
@@ -90,6 +92,7 @@ def register_tool(
             execute=func,
             admin_only=admin_only,
             history_formatter=history_formatter,
+            chat_types=chat_types,
         )
         _registry[name] = tool
         logger.info(f"已注册本地工具: {TOOL_PREFIX}__{name} — {description[:50]}")
@@ -104,7 +107,7 @@ def get_openai_tools(*, chat_type: str = "private") -> list[dict]:
     """将本地工具转换为 OpenAI function calling 格式，按 chat_type 过滤 admin_only 工具"""
     tools = []
     for name, tool in _registry.items():
-        if tool.admin_only and chat_type != "private":
+        if chat_type not in tool.chat_types or (tool.admin_only and chat_type != "private"):
             continue
         tools.append({
             "type": "function",
@@ -139,6 +142,9 @@ async def handle_tool_call(
     if not tool:
         return f"[错误] 本地工具 '{tool_name}' 不存在"
 
+    if (context or {}).get("_chat_type", "private") not in tool.chat_types:
+        return "[错误] 此工具不能在当前会话使用"
+
     try:
         call_args = {**arguments}
         if context:
@@ -159,7 +165,7 @@ def list_tools_summary(*, chat_type: str = "private") -> list[str]:
     """返回本地工具的摘要列表，按 chat_type 过滤"""
     lines = []
     for name, tool in _registry.items():
-        if tool.admin_only and chat_type != "private":
+        if chat_type not in tool.chat_types or (tool.admin_only and chat_type != "private"):
             continue
         desc = tool.description[:60]
         lines.append(f"  • {TOOL_PREFIX}__{name} — {desc}")

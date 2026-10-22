@@ -343,7 +343,7 @@ AzureSnowBot/
 ### 安装依赖
 
 ```bash
-pip install "nonebot2[fastapi]" nonebot-adapter-onebot httpx mcp PyJWT bcrypt
+pip install "nonebot2[fastapi]" nonebot-adapter-onebot httpx mcp PyJWT bcrypt "Pillow>=12.0,<14"
 ```
 
 Web Dashboard 前端（可选，需要 Node.js）：

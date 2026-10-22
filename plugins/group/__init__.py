@@ -22,6 +22,15 @@ async def _cleanup_tool_logs_periodically() -> None:
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
         await asyncio.to_thread(cleanup_tool_logs)
+        await _cleanup_sticker_files()
+
+
+async def _cleanup_sticker_files() -> None:
+    from ..stickers import cleanup
+    try:
+        await asyncio.to_thread(cleanup)
+    except Exception as exc:
+        logger.warning(f"表情临时文件清理失败: {type(exc).__name__}")
 
 
 def _start_group_heartbeats() -> None:
@@ -45,6 +54,7 @@ async def _startup():
     from ..tool_log import cleanup_tool_logs
 
     await asyncio.to_thread(cleanup_tool_logs)
+    await _cleanup_sticker_files()
     if _tool_log_cleanup_task is None or _tool_log_cleanup_task.done():
         _tool_log_cleanup_task = asyncio.create_task(_cleanup_tool_logs_periodically())
     skill.scan_skills()     # Skill 系统（同步，纯文件扫描）
