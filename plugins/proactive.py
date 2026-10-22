@@ -319,6 +319,11 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
     messages = [{"role": "system", "content": prompt}] + heartbeat_history
     # 追加心跳指令（用 user 角色确保 LLM 优先遵循，而非被对话历史带偏）
     messages.append({"role": "user", "content": _build_heartbeat_instruction(chat_type)})
+    if chat_type == "group":
+        from .sticker_reply import prompt as sticker_prompt
+        catalog = sticker_prompt(target_id)
+        if catalog:
+            messages.append({"role": "system", "content": catalog})
 
     # 注入完整工具链（Skill + 本地 + MCP）
     openai_tools = skill_openai_tools() + local_tools + mcp_openai_tools()
@@ -346,9 +351,15 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
                     bot = get_bot()
                     await send_chunked_raw(bot, "private", int(ADMIN_NUMBER), reply)
                 else:
-                    append_message(target_id, {"role": "assistant", "content": reply}, persona)
+                    from .sticker_reply import prepare
+                    reply, sticker = prepare(target_id, reply)
+                    if not reply and not sticker:
+                        return
+                    if reply:
+                        append_message(target_id, {"role": "assistant", "content": reply}, persona)
                     bot = get_bot()
-                    await send_chunked_raw(bot, "group", int(target_id), reply)
+                    options = {"sticker": sticker, "persona": persona} if sticker else {}
+                    await send_chunked_raw(bot, "group", int(target_id), reply, **options)
                 logger.info(f"心跳 [{chat_type}:{target_id}]: 已发送主动消息 ({len(reply)} 字)")
                 return
 

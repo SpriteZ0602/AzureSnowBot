@@ -118,3 +118,13 @@ def remember_sent_message(group_id: str, response: dict, text: str, author: str)
     put_context(str(group_id), f"qq:{mid}", {
         "text": text[:50000], "images": [], "author": author,
     }, kind="outgoing", aliases=aliases)
+
+
+def remember_sticker_message(group_id: str, response: dict, item: dict, author: str) -> None:
+    mid = response.get("message_id")
+    if mid is None:
+        return
+    put_context(group_id, f"qq:{mid}", {
+        "text": f"[表情包 #{item['id'][:8]}：{'、'.join(item['tags'])}；{item.get('description', '')}]",
+        "images": [], "author": author, "kind": "sticker", "sticker_id": item["id"],
+    }, kind="outgoing")

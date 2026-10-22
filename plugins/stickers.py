@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import random
 import tempfile
 import time
 import uuid
@@ -287,4 +288,31 @@ def request_permissions(text: str, quoted_id=None) -> dict:
     return {
         "_sticker_save_allowed": bool(quoted_id and not denied and re.search(r"收藏|存成|存为|保存|存下|收录|记成", text)),
         "_sticker_delete_allowed": bool(quoted_id and not denied and re.search(r"删除|删掉|删了|移除", text)),
+        "_sticker_explicit_allowed": bool(not denied and re.search(
+            r"(?:发|来|给|找|想看|看看|要).{0,24}(?:表情|图片|动图|张)|(?:表情|图片|动图).{0,16}(?:发|来|给|找|要)", text)),
     }
+
+
+def select(gid: str, tags: list[str], *, automatic: bool = False) -> dict | None:
+    tags = normalize_tags(tags)
+    with _lock:
+        data = _load(gid)
+        if automatic and (not enabled(gid) or time.time() - data.get("last_auto_at", 0) < 60):
+            return None
+        matches = [i for i in data["items"] if set(tags) <= set(i["tags"]) and image_path(gid, i).is_file()]
+        if not matches:
+            return None
+        oldest = min(i.get("last_used_at") or 0 for i in matches)
+        item = random.choice([i for i in matches if (i.get("last_used_at") or 0) == oldest])
+        return dict(item, _automatic=automatic)
+
+
+def reserve_auto(gid: str) -> bool:
+    """在发送锁内预留冷却；超时也消耗冷却，避免网络状态未知时重复刷图。"""
+    with _lock:
+        data = _load(gid)
+        if not enabled(gid) or time.time() - data.get("last_auto_at", 0) < 60:
+            return False
+        data["last_auto_at"] = time.time()
+        _save(gid, data)
+        return True

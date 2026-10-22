@@ -180,6 +180,10 @@ async def _generate_chime(group_id: str) -> str:
         {"role": "system", "content": prompt},
         {"role": "user", "content": f"{recent}\n\n{_CHIME_INSTRUCTION}".strip()},
     ]
+    from ..sticker_reply import prompt as sticker_prompt
+    catalog = sticker_prompt(group_id)
+    if catalog:
+        messages.append({"role": "system", "content": catalog})
 
     from ..proactive import _strip_thinking
 
@@ -225,8 +229,14 @@ async def handle_chatter(bot: Bot, event: GroupMessageEvent):
                 logger.debug(f"群 {group_id} 热闹插话：LLM 选择沉默")
                 return
 
-            append_message(group_id, {"role": "assistant", "content": reply}, persona)
-            await send_chunked(bot, event, chunk_text(reply), reply_first=False)
+            from ..sticker_reply import prepare
+            reply, sticker = prepare(group_id, reply)
+            if reply.upper() in SKIP_REPLIES or (not reply and not sticker):
+                return
+            if reply:
+                append_message(group_id, {"role": "assistant", "content": reply}, persona)
+            options = {"sticker": sticker, "persona": persona} if sticker else {}
+            await send_chunked(bot, event, chunk_text(reply), reply_first=False, **options)
             note_bot_reply(group_id)
             if get_group_proactive(group_id):
                 reset_idle_timer(f"group:{group_id}")

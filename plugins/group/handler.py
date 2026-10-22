@@ -127,7 +127,7 @@ async def _handle_group_chat(
     if known_notes:
         apply_image_notes(group_id, active_persona, known_notes)
     pending_images = [image for image in quoted_images
-                      if SUPPORTS_VISION and image.url and not any(sticker_permissions.values())
+                      if SUPPORTS_VISION and image.url and not (sticker_permissions["_sticker_save_allowed"] or sticker_permissions["_sticker_delete_allowed"])
                       and (refresh_images or not cached_note(group_id, image.image_id))]
 
     sender = event.sender.nickname or str(event.user_id)
@@ -221,6 +221,10 @@ async def _handle_group_chat(
         'role': 'system',
         'content': build_time_context(last) + ("\n" + visual_instruction(pending_images) if pending_images else ""),
     })
+    from ..sticker_reply import prompt as sticker_prompt, prepare as prepare_sticker, split_marker
+    catalog = sticker_prompt(group_id)
+    if catalog:
+        messages[-1]["content"] += "\n" + catalog
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -245,6 +249,20 @@ async def _handle_group_chat(
 
     format_kwargs = {"response_format": {"type": "json_object"}} if pending_images else {}
 
+    async def send_final(reply: str) -> bool:
+        reply, sticker = prepare_sticker(group_id, reply, requested_id=_tool_context.get("_requested_sticker"))
+        if not reply and not sticker:
+            return False
+        if reply:
+            append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
+        options = {"sticker": sticker, "persona": active_persona} if sticker else {}
+        await send_chunked(get_bot(), event, chunk_text(reply), **options)
+        from .chatter import note_bot_reply
+        note_bot_reply(group_id)
+        if get_group_proactive(group_id):
+            reset_group_proactive_timer(f"group:{group_id}")
+        return True
+
     try:
         from ..llm import call_llm
         # ── Agentic Loop ──
@@ -256,22 +274,13 @@ async def _handle_group_chat(
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
                 reply = readable_reply(assistant_msg, final=True)
-                if reply:
-                    append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
-                    bot = get_bot()
-                    chunks = chunk_text(reply)
-                    await send_chunked(bot, event, chunks)
-                    from .chatter import note_bot_reply
-                    note_bot_reply(group_id)
-                    # Bot 刚在群里发言，延后该群的主动对话心跳（仅开启时）
-                    if get_group_proactive(group_id):
-                        reset_group_proactive_timer(f"group:{group_id}")
+                await send_final(reply)
                 return
 
             # 模型可以在同一次回复里既输出文字又调用工具：
             # 文字（"我来查一下…"）先发给用户，再继续执行工具调用。
             # 原本这段文字会被直接丢弃（不进历史、不发消息）。
-            prelude = readable_reply(assistant_msg)
+            prelude = split_marker(readable_reply(assistant_msg))[0]
             if prelude:
                 append_message(group_id, {"role": "assistant", "content": prelude}, active_persona)
                 bot = get_bot()
@@ -318,16 +327,7 @@ async def _handle_group_chat(
             reply = readable_reply(final_data["choices"][0]["message"], final=True)
         except Exception:
             reply = "（工具调用轮次已达上限，请重新提问）"
-        if reply:
-            append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
-            bot = get_bot()
-            chunks = chunk_text(reply)
-            await send_chunked(bot, event, chunks)
-            from .chatter import note_bot_reply
-            note_bot_reply(group_id)
-            # Bot 刚在群里发言，延后该群的主动对话心跳（仅开启时）
-            if get_group_proactive(group_id):
-                reset_group_proactive_timer(f"group:{group_id}")
+        await send_final(reply)
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await group_chat.finish(f"API 请求失败 ({e.response.status_code})")

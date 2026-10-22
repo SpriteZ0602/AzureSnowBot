@@ -138,6 +138,8 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 - 自然语言引用收藏/删除使用 `save_quoted_sticker` / `delete_quoted_sticker`，权限来自当前用户文字及 handler 的引用上下文，Sub-Agent 不继承修改权限。
 - 群内 `/表情列表` 按标签分批合并转发（20 图/8 MiB），Admin 私聊 `/自动表情 <群号> on|off` 设置群配置 `auto_stickers`（默认 true）。只提供这两个新增指令。
 - 工具可设置 `@register_tool(chat_types=("group",))` 限制会话类型，分发时同时校验。
+- `plugins/sticker_reply.py` 每轮读取完整标签目录，放入末尾独立 system 上下文；最终回复末行 `[[sticker:标签1,标签2]]` 按标签交集选一张。标记不进入正文/历史；自动冷却 60 秒，Admin 关闭自动配图后自然语言明确索图仍可使用 `request_sticker`。
+- 群主对话、心跳、定时任务和插话共用发送附件。`send_chunked` / `send_chunked_raw` 接受可选 `sticker`、`persona`，`SendResult.sticker_result` 区分图片状态。文字和图片在同一发送锁内完成；图片单独发送并在 chatlog.db 中保存收藏 ID 关联，便于引用删除。失败/未知状态不会记成成功或自动重发。
 
 ### 消息分条发送（Chunker）
 发送函数返回 `SendResult(status, message_ids)`，`status` 为 `sent/failed/unknown`。

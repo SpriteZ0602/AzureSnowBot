@@ -132,6 +132,11 @@ async def _generate_reminder_message(job: ReminderJob) -> str:
             f"现在时间到了，请你提醒他，去做“{job.message}”这件事。"
         )
         messages.append({"role": "user", "content": reminder_instruction})
+        if job.chat_type == "group":
+            from ..sticker_reply import prompt as sticker_prompt
+            catalog = sticker_prompt(job.target_id)
+            if catalog:
+                messages.append({"role": "system", "content": catalog})
 
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -285,6 +290,11 @@ async def _execute_scheduled_task(job: ReminderJob) -> str:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": instruction},
         ]
+        if job.chat_type == "group":
+            from ..sticker_reply import prompt as sticker_prompt
+            catalog = sticker_prompt(job.target_id)
+            if catalog:
+                messages.append({"role": "system", "content": catalog})
 
         for round_idx in range(MAX_TOOL_ROUNDS):
             data = await call_llm(messages, tools=openai_tools or None, source="task")
@@ -351,13 +361,13 @@ async def _execute_scheduled_task(job: ReminderJob) -> str:
 
 # ──────────────────── 写入聊天历史 ────────────────────
 
-def _append_to_history(job: ReminderJob, text: str) -> None:
+def _append_to_history(job: ReminderJob, text: str, persona: str | None = None) -> None:
     """将提醒消息写入对应会话的聊天历史，以便后续对话 LLM 可见。"""
     try:
         msg = {"role": "assistant", "content": text}
         if job.chat_type == "group":
             from ..persona.manager import get_active_persona, append_message
-            persona = get_active_persona(job.target_id)
+            persona = persona or get_active_persona(job.target_id)
             append_message(job.target_id, msg, persona)
         else:
             from ..chat.handler import append_message as chat_append
@@ -387,6 +397,26 @@ def _reset_proactive_if_admin(job: ReminderJob) -> None:
 
 # ──────────────────── 触发逻辑 ────────────────────
 
+def _job_persona(job: ReminderJob) -> str | None:
+    if job.chat_type == "group":
+        from ..persona.manager import get_active_persona
+        return get_active_persona(job.target_id)
+    return None
+
+
+async def _send_job_result(bot, job: ReminderJob, text: str, persona: str | None) -> None:
+    options = {}
+    if job.chat_type == "group":
+        from ..sticker_reply import prepare
+        text, sticker = prepare(job.target_id, text)
+        if sticker:
+            options = {"sticker": sticker, "persona": persona}
+        if not text and not sticker:
+            return
+    await send_chunked_raw(bot, job.chat_type, int(job.target_id), text, **options)
+    if text:
+        _append_to_history(job, text, persona)
+
 async def _fire(job: ReminderJob) -> None:
     """等待到期后发送提醒消息（一次性提醒）"""
     fire_at = datetime.fromisoformat(job.fire_at)
@@ -403,6 +433,7 @@ async def _fire(job: ReminderJob) -> None:
 
     try:
         bot = get_bot()
+        persona = _job_persona(job)
 
         # 调用 LLM 生成提醒消息
         text = await _generate_reminder_message(job)
@@ -413,10 +444,7 @@ async def _fire(job: ReminderJob) -> None:
             text = f"（延迟提醒）{text}"
 
         # 分条发送
-        await send_chunked_raw(bot, job.chat_type, int(job.target_id), text)
-
-        # 写入聊天历史
-        _append_to_history(job, text)
+        await _send_job_result(bot, job, text, persona)
 
         # Admin 私聊提醒触发后重置主动发言计时器，防止时间重叠
         _reset_proactive_if_admin(job)
@@ -447,16 +475,14 @@ async def _fire_daily(job: ReminderJob) -> None:
 
         try:
             bot = get_bot()
+            persona = _job_persona(job)
             if job.mode == "task":
                 text = await _execute_scheduled_task(job)
             else:
                 text = await _generate_reminder_message(job)
 
             # 分条发送
-            await send_chunked_raw(bot, job.chat_type, int(job.target_id), text)
-
-            # 写入聊天历史
-            _append_to_history(job, text)
+            await _send_job_result(bot, job, text, persona)
 
             # Admin 私聊提醒触发后重置主动发言计时器，防止时间重叠
             _reset_proactive_if_admin(job)

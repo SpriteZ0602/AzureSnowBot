@@ -17,6 +17,7 @@
 import re
 import asyncio
 import random
+import base64
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -158,6 +159,7 @@ def build_forward_nodes(
 class SendResult:
     status: str  # sent / failed / unknown
     message_ids: tuple[int, ...] = ()
+    sticker_result: "SendResult | None" = None
 
 
 def _delivery_error(exc: Exception) -> SendResult:
@@ -219,12 +221,50 @@ async def send_forward(
 
 # ──────────────────── 分条发送 ────────────────────
 
+async def _send_sticker_unlocked(bot, target_id: int, sticker: dict, persona: str | None) -> SendResult | None:
+    from . import stickers as library
+    gid = str(target_id)
+    try:
+        item, content = library.read_image(gid, sticker["id"])
+        if sticker.get("_automatic") and not library.reserve_auto(gid):
+            return None
+    except Exception as exc:
+        logger.warning(f"发送前表情读取失败: {type(exc).__name__}")
+        result = SendResult("failed")
+        item = sticker
+    else:
+        try:
+            response = await bot.send_group_msg(group_id=target_id, message=MessageSegment.image(
+                "base64://" + base64.b64encode(content).decode("ascii")))
+        except Exception as exc:
+            result = _delivery_error(exc)
+        else:
+            mid = response.get("message_id") if isinstance(response, dict) else None
+            ids = (int(mid),) if isinstance(mid, (str, int)) and str(mid).lstrip("-").isdigit() else ()
+            result = SendResult("sent", ids)
+            try:
+                from .message_store import remember_sticker_message
+                remember_sticker_message(gid, response if isinstance(response, dict) else {}, item, _self_nickname or "Bot")
+                library.mark_used(gid, item["id"])
+            except Exception as exc:
+                logger.warning(f"表情已发送，保存关联失败: {type(exc).__name__}")
+    try:
+        from .persona.manager import append_message
+        state = {"sent": "已发送", "failed": "发送失败", "unknown": "发送状态未知"}[result.status]
+        append_message(gid, {"role": "assistant", "content":
+            f"[表情包{state} #{item['id'][:8]}：{'、'.join(item['tags'])}；{item.get('description', '')}]"}, persona)
+    except Exception as exc:
+        logger.warning(f"保存表情发送记录失败: {type(exc).__name__}")
+    return result
+
 async def send_chunked(
     bot: Bot,
     event,
     chunks: list[str],
     *,
     reply_first: bool = True,
+    sticker: dict | None = None,
+    persona: str | None = None,
 ) -> SendResult:
     """
     分条发送消息列表，每条之间加随机延迟。
@@ -236,7 +276,7 @@ async def send_chunked(
         reply_first: 第一条是否引用原消息（分段数达到 FORWARD_THRESHOLD 时
                      走合并转发，此时引用会被丢弃 —— 聊天记录无法带引用）
     """
-    if not chunks:
+    if not chunks and not sticker:
         return SendResult("sent")
 
     key = _session_key(event)
@@ -246,11 +286,17 @@ async def send_chunked(
         group_id = getattr(event, "group_id", None)
         chat_type = "group" if group_id else "private"
         target_id = group_id if group_id else event.user_id
+        if group_id and sticker and persona is None:
+            from .persona.manager import get_active_persona
+            persona = get_active_persona(str(group_id))
 
         # 分段太多时合并成一条「聊天记录」，避免刷屏
         if len(chunks) >= FORWARD_THRESHOLD:
             forwarded = await send_forward(bot, chat_type, target_id, chunks)
-            if forwarded.status != "failed":
+            if forwarded.status == "sent":
+                image_result = await _send_sticker_unlocked(bot, target_id, sticker, persona) if group_id and sticker else None
+                return SendResult("sent", forwarded.message_ids, image_result)
+            if forwarded.status == "unknown":
                 return forwarded
 
         message_ids = []
@@ -275,7 +321,8 @@ async def send_chunked(
             if i < len(chunks) - 1:
                 delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX)
                 await asyncio.sleep(delay)
-        return SendResult("sent", tuple(message_ids))
+        image_result = await _send_sticker_unlocked(bot, target_id, sticker, persona) if group_id and sticker else None
+        return SendResult("sent", tuple(message_ids), image_result)
 
 
 async def send_chunked_raw(
@@ -283,6 +330,9 @@ async def send_chunked_raw(
     chat_type: str,
     target_id: int,
     text: str,
+    *,
+    sticker: dict | None = None,
+    persona: str | None = None,
 ) -> SendResult:
     """
     无需 event 对象的分条发送。供提醒等主动推送场景使用。
@@ -296,15 +346,21 @@ async def send_chunked_raw(
     分段数达到 FORWARD_THRESHOLD 时改用合并转发，失败回退逐条发送。
     """
     chunks = chunk_text(text)
-    if not chunks:
+    if not chunks and not sticker:
         return SendResult("sent")
 
     key = f"{'g' if chat_type == 'group' else 'u'}:{target_id}"
 
     async with _session_locks[key]:
+        if chat_type == "group" and sticker and persona is None:
+            from .persona.manager import get_active_persona
+            persona = get_active_persona(str(target_id))
         if len(chunks) >= FORWARD_THRESHOLD:
             forwarded = await send_forward(bot, chat_type, target_id, chunks)
-            if forwarded.status != "failed":
+            if forwarded.status == "sent":
+                image_result = await _send_sticker_unlocked(bot, target_id, sticker, persona) if chat_type == "group" and sticker else None
+                return SendResult("sent", forwarded.message_ids, image_result)
+            if forwarded.status == "unknown":
                 return forwarded
 
         message_ids = []
@@ -324,4 +380,5 @@ async def send_chunked_raw(
             if i < len(chunks) - 1:
                 delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX)
                 await asyncio.sleep(delay)
-        return SendResult("sent", tuple(message_ids))
+        image_result = await _send_sticker_unlocked(bot, target_id, sticker, persona) if chat_type == "group" and sticker else None
+        return SendResult("sent", tuple(message_ids), image_result)

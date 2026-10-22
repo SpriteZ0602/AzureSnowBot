@@ -36,3 +36,17 @@ async def delete_quoted_sticker(_context=None, **kwargs) -> str:
         return "已删除这张表情包及其全部标签关联" if deleted else "这张表情包已经删除"
     except Exception as exc:
         return f"[错误] 删除失败：{exc}"
+
+
+@register_tool(name="request_sticker", description="仅在用户当前明确要求发表情或找图片时使用，按全部标签同时匹配，选好后随本轮最终回复发送。",
+               parameters={"type": "object", "properties": {"tags": {"type": "array", "items": {"type": "string"}}}, "required": ["tags"]},
+               chat_types=("group",))
+async def request_sticker(tags=None, _context=None, **kwargs) -> str:
+    ctx = _context or {}
+    if ctx.get("_chat_type") != "group" or not ctx.get("_sticker_explicit_allowed"):
+        return "[错误] 此工具仅响应用户当前明确的索图请求"
+    item = library.select(ctx["_target_id"], tags)
+    if not item:
+        return "没有同时匹配这些标签的本群表情包，不要声称已经发送"
+    ctx["_requested_sticker"] = item["id"]
+    return f"已选择 #{item['id'][:8]}（{'、'.join(item['tags'])}），将在本轮最终回复后尝试发送，目前尚未发送"

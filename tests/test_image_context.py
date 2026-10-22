@@ -251,6 +251,23 @@ async def test_real_handler_invalid_json_keeps_placeholder(group_handler):
     assert "尚未识别" in load_jsonl_history(path("123", "cat"))[0]["content"]
 
 
+async def test_real_handler_strips_sticker_marker_after_visual_json(group_handler, monkeypatch):
+    handler, event, llm, sent, manager, path = group_handler
+    runtime = types.ModuleType("plugins.sticker_reply")
+    runtime.prompt = lambda gid: "本群表情标签：开心（1）"
+    runtime.prepare = lambda gid, text, **kw: (text.split("\n[[sticker:", 1)[0], {"id": "test"})
+    runtime.split_marker = lambda text: (text, None)
+    monkeypatch.setitem(sys.modules, "plugins.sticker_reply", runtime)
+    llm.return_value = {"choices": [{"message": {"content": json.dumps({
+        "reply": "真开心\n[[sticker:开心]]", "image_notes": [],
+    })}}]}
+    await handler._handle_group_chat(event, "123", "cat", "这张图写了什么？")
+    assert sent.await_args.args[2] == ["真开心"]
+    assert sent.await_args.kwargs == {"sticker": {"id": "test"}, "persona": "cat"}
+    assert "本群表情标签" in llm.await_args.args[0][-1]["content"]
+    assert "[[sticker:" not in str(load_jsonl_history(path("123", "cat")))
+
+
 async def test_real_handler_repeated_quote_does_not_resend_image(group_handler):
     handler, event, llm, sent, manager, path = group_handler
     quoted = await MessageResolver(MagicMock(), "123").resolve(event.reply.message, origin="qq:77")
