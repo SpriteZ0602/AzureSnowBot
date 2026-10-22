@@ -87,9 +87,11 @@ def _preview(text: str, ref: str) -> str:
 
 
 class MessageResolver:
-    def __init__(self, bot, group_id: str, self_id: str = "", *, refresh: bool = False):
+    def __init__(self, bot, group_id: str, self_id: str = "", *, refresh: bool = False, max_images: int = MAX_IMAGES):
         self.bot, self.group_id, self.self_id = bot, str(group_id), str(self_id)
         self.refresh = refresh
+        self.max_images = max_images
+        self.images_complete = True
         self.nodes = 0
         self.images: list[ImageRef] = []
         self.visited: set[str] = set()
@@ -119,8 +121,13 @@ class MessageResolver:
                 # 同一原消息里的同一图片按 file/URL 标识定位，不依赖段下标。
                 identity = f"{origin}:{data.get('file') or url.split('?', 1)[0] or index}"
                 iid = "img_" + hashlib.sha256(identity.encode()).hexdigest()[:20]
-                if len(self.images) < MAX_IMAGES and url and all(i.image_id != iid for i in self.images):
-                    self.images.append(ImageRef(iid, url))
+                if not url:
+                    self.images_complete = False
+                elif all(i.image_id != iid for i in self.images):
+                    if len(self.images) < self.max_images:
+                        self.images.append(ImageRef(iid, url))
+                    else:
+                        self.images_complete = False
                 from .image_context import register_image
                 parts.append(register_image(self.group_id, ImageRef(iid, url), origin))
             elif kind == "forward":
@@ -130,6 +137,7 @@ class MessageResolver:
             elif kind in ("record", "video", "file"):
                 parts.append({"record": "[语音]", "video": "[视频]", "file": "[文件]"}[kind])
             if sum(map(len, parts)) > MAX_TEXT:
+                self.images_complete = False
                 parts.append("[内容已截断]")
                 break
         return ResolvedMessage("".join(parts).strip()[:MAX_TEXT], list(self.images))
@@ -138,13 +146,17 @@ class MessageResolver:
         fid = str(data.get("id") or "")
         ref = f"forward:{fid}" if fid else f"forward:inline_{hashlib.sha256(origin.encode()).hexdigest()[:20]}"
         if depth >= MAX_DEPTH or ref in self.visited:
+            self.images_complete = False
             return f"[合并转发 {ref}：达到嵌套上限或循环引用]"
         try:
             cached = None if self.refresh else _cached(self.group_id, ref)
             if cached:
                 for img in cached.get("images", []):
-                    if len(self.images) < MAX_IMAGES and all(i.image_id != img["image_id"] for i in self.images):
-                        self.images.append(ImageRef(**img))
+                    if all(i.image_id != img["image_id"] for i in self.images):
+                        if len(self.images) < self.max_images:
+                            self.images.append(ImageRef(**img))
+                        else:
+                            self.images_complete = False
                 from .image_context import hydrate_text
                 return f"\n[合并转发 {ref}]\n{_preview(hydrate_text(self.group_id, cached['text']), ref)}\n[转发结束]\n"
             nodes = data.get("content")
@@ -156,6 +168,7 @@ class MessageResolver:
             before = len(self.images)
             for node in nodes or []:
                 if self.nodes >= MAX_NODES:
+                    self.images_complete = False
                     lines.append("[转发节点已截断：达到条数上限]")
                     break
                 self.nodes += 1
@@ -171,6 +184,7 @@ class MessageResolver:
                 resolved = await self.resolve(content or [], origin=f"{ref}:{self.nodes}", depth=depth + 1)
                 lines.append(f"[转发中的作者 {author}{'(' + uid + ')' if uid else ''}]: {resolved.text}")
                 if sum(map(len, lines)) >= MAX_TEXT:
+                    self.images_complete = False
                     lines.append("[转发内容已截断]")
                     break
             self.visited.remove(ref)
@@ -179,6 +193,7 @@ class MessageResolver:
                               kind="forward", ttl=store.FORWARD_TTL)
             return f"\n[合并转发 {ref}]\n{_preview(text, ref)}\n[转发结束]\n"
         except Exception as exc:
+            self.images_complete = False
             logger.warning(f"读取合并转发失败: {type(exc).__name__}")
             return f"[合并转发 {ref}：读取失败或已过期]"
 

@@ -164,6 +164,105 @@ def sticker_tools(lib, monkeypatch):
     return mod
 
 
+@pytest.fixture
+def batch_quote(sticker_tools, lib, monkeypatch, tmp_path):
+    parser = load("plugins.message_parser_sticker_batch_test", "plugins/message_parser.py")
+    store = load("plugins.message_store_sticker_batch_test", "plugins/message_store.py")
+    store.DB_PATH = tmp_path / "batch-chatlog.db"
+    parser.store = store
+    monkeypatch.setitem(sys.modules, "plugins.message_parser", parser)
+    from plugins import image_context
+    monkeypatch.setattr(image_context, "register_image", lambda gid, image, origin: parser.image_marker(image.image_id))
+    raw = [{"type": "image", "data": {"file": f"image-{i}", "url": f"https://qq.example/{i}"}} for i in range(8)]
+    bot = types.SimpleNamespace(get_msg=AsyncMock(return_value={"message": raw}), get_forward_msg=AsyncMock())
+    monkeypatch.setattr(sys.modules["nonebot"], "get_bot", lambda: bot, raising=False)
+    bodies = {str(i): picture((i * 25, 10, 30)) for i in range(8)}
+    bodies["1"] = picture(animated=True)
+    downloads = []
+    def respond(request):
+        key = request.url.path.lstrip("/")
+        downloads.append(key)
+        return httpx.Response(200, content=bodies[key])
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(lib.httpx, "AsyncClient", lambda **kw: client_class(transport=httpx.MockTransport(respond), **kw))
+    ctx = {"_chat_type": "group", "_target_id": "123", "_user_id": "99", "_sticker_user_turn": True,
+           "_quoted_message_id": 77, "_quoted_sticker_urls": [seg["data"]["url"] for seg in raw[:4]]}
+    return bot, raw, bodies, downloads, ctx
+
+
+@pytest.mark.asyncio
+async def test_batch_collects_more_than_four_deduplicates_and_preserves_gif(sticker_tools, lib, batch_quote):
+    bot, _, bodies, downloads, ctx = batch_quote
+    bodies["7"] = bodies["0"]
+    result = await sticker_tools.save_quoted_sticker(["兔子", "开心"], all_images=True, _context=ctx)
+    assert result.startswith("批量收藏完成")
+    assert "新收藏 7 张" in result and "合并标签 1 张" in result and "失败 0 张" in result
+    assert downloads == [str(i) for i in range(8)]
+    assert len(lib.items("123")) == 7 and lib.items("456") == []
+    assert all(item["tags"] == ["兔子", "开心"] and item["uploader"] == "99" for item in lib.items("123"))
+    gif = next(item for item in lib.items("123") if item["mime"] == "image/gif")
+    assert lib.read_image("123", gif["id"])[1] == bodies["1"]
+    bot.get_msg.assert_awaited_once_with(message_id=77)
+
+
+@pytest.mark.asyncio
+async def test_batch_reports_partial_failure_and_retry_reuses_successes(sticker_tools, lib, batch_quote):
+    bot, raw, bodies, downloads, ctx = batch_quote
+    bot.get_msg.return_value = {"message": raw[:3]}
+    bodies["1"] = b"broken image"
+    first = await sticker_tools.save_quoted_sticker(["兔子"], all_images=True, _context=ctx)
+    assert first.startswith("[错误]") and "新收藏 2 张" in first and "失败 1 张" in first and "第 2 张" in first
+    assert len(lib.items("123")) == 2 and downloads == ["0", "1", "2"]
+    second = await sticker_tools.save_quoted_sticker(["兔子"], all_images=True, _context=ctx)
+    assert "新收藏 0 张" in second and "合并标签 2 张" in second and len(lib.items("123")) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", ["count", "bytes"])
+async def test_batch_stops_at_quota_preserving_completed_images(sticker_tools, lib, batch_quote, monkeypatch, limit):
+    bot, raw, bodies, downloads, ctx = batch_quote
+    bot.get_msg.return_value = {"message": raw[:3]}
+    if limit == "count":
+        monkeypatch.setattr(lib, "MAX_COUNT", 3)
+        for color in ("green", "yellow"):
+            lib.add("123", picture(color), ["已有"])
+    else:
+        monkeypatch.setattr(lib, "MAX_TOTAL_BYTES", len(lib._prepare(bodies["0"])[0]))
+    result = await sticker_tools.save_quoted_sticker(["兔子"], all_images=True, _context=ctx)
+    assert result.startswith("[错误]") and "新收藏 1 张" in result and "失败 1 张" in result and "未处理 1 张" in result
+    assert downloads == ["0", "1"]
+    assert lib.tag_counts("123")["兔子"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["missing_url", "too_many", "forward_limit", "forward_failed"])
+async def test_incomplete_batch_does_not_download_or_claim_all_saved(sticker_tools, lib, batch_quote, source):
+    bot, raw, _, downloads, ctx = batch_quote
+    if source == "missing_url":
+        bot.get_msg.return_value = {"message": [raw[0], {"type": "image", "data": {"file": "missing"}}]}
+    elif source == "too_many":
+        bot.get_msg.return_value = {"message": [{"type": "image", "data": {
+            "file": str(i), "url": f"https://qq.example/{i}"}} for i in range(201)]}
+    else:
+        bot.get_msg.return_value = {"message": [{"type": "forward", "data": {"id": "many"}}]}
+        if source == "forward_limit":
+            bot.get_forward_msg.return_value = {"messages": [{"sender": {}, "message": [raw[0]]} for _ in range(101)]}
+        else:
+            bot.get_forward_msg.side_effect = RuntimeError("expired")
+    result = await sticker_tools.save_quoted_sticker(["兔子"], all_images=True, _context=ctx)
+    assert result.startswith("[错误]") and "未开始收藏" in result
+    assert downloads == [] and lib.items("123") == []
+
+
+@pytest.mark.asyncio
+async def test_batch_can_collect_all_images_in_forward(sticker_tools, lib, batch_quote):
+    bot, raw, _, downloads, ctx = batch_quote
+    bot.get_msg.return_value = {"message": [{"type": "forward", "data": {"id": "pictures"}}]}
+    bot.get_forward_msg.return_value = {"messages": [{"sender": {}, "message": [seg]} for seg in raw]}
+    result = await sticker_tools.save_quoted_sticker(["兔子"], all_images=True, _context=ctx)
+    assert result.startswith("批量收藏完成") and len(downloads) == len(lib.items("123")) == 8
+
+
 @pytest.mark.asyncio
 async def test_tools_require_user_capability_and_single_quote(sticker_tools, lib):
     background = {"_chat_type": "group", "_target_id": "123", "_quoted_message_id": 77,

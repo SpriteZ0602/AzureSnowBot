@@ -31,6 +31,10 @@ class StickerError(ValueError):
     pass
 
 
+class StickerLimitError(StickerError):
+    """图库已满；批量收藏保留已完成项目，停止继续下载。"""
+
+
 def group_dir(gid: str) -> Path:
     gid = str(gid)
     if not gid.isascii() or not gid.isdigit():
@@ -173,10 +177,10 @@ def add(gid: str, raw: bytes, tags: list[str], uploader: str = "", description: 
             _save(gid, data)
             return dict(existing), False
         if len(data["items"]) >= MAX_COUNT:
-            raise StickerError(f"本群已有 {MAX_COUNT} 张表情，请先删除再收藏")
+            raise StickerLimitError(f"本群已有 {MAX_COUNT} 张表情，请先删除再收藏")
         _check_tags(data, tags)
         if total_bytes() + len(content) > MAX_TOTAL_BYTES:
-            raise StickerError("所有群图库已达到 5 GB 上限，请先清理")
+            raise StickerLimitError("所有群图库已达到 5 GB 上限，请先清理")
         directory = group_dir(gid) / "images"
         directory.mkdir(parents=True, exist_ok=True)
         item = {"id": uuid.uuid4().hex, "hash": digest, "file": f"{digest}.{ext}", "mime": mime,
