@@ -7,6 +7,7 @@ from .personas import router as personas_router
 from .reminders import router as reminders_router
 from .skills import router as skills_router
 from .config_routes import router as config_router
+from .stickers import router as stickers_router
 
 __all__ = [
     "auth_router",
@@ -18,4 +19,5 @@ __all__ = [
     "reminders_router",
     "skills_router",
     "config_router",
+    "stickers_router",
 ]

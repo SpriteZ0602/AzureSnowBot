@@ -21,6 +21,7 @@ from .routes import (
     reminders_router,
     skills_router,
     config_router,
+    stickers_router,
 )
 
 # ──────────────────── Rate Limiting ────────────────────
@@ -76,5 +77,6 @@ def create_dashboard_app() -> FastAPI:
     app.include_router(reminders_router, prefix="/reminders", tags=["提醒管理"])
     app.include_router(skills_router, prefix="/skills", tags=["技能管理"])
     app.include_router(config_router, prefix="/config", tags=["配置编辑"])
+    app.include_router(stickers_router, prefix="/stickers", tags=["表情包"])
 
     return app

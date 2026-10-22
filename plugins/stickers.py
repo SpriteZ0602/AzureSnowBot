@@ -85,7 +85,8 @@ def groups() -> list[str]:
 
 
 def total_bytes() -> int:
-    return sum(p.stat().st_size for gid in groups() for p in (group_dir(gid) / "images").glob("*") if p.is_file())
+    with _lock:
+        return sum(p.stat().st_size for gid in groups() for p in (group_dir(gid) / "images").glob("*") if p.is_file())
 
 
 def tag_counts(gid: str) -> dict[str, int]:

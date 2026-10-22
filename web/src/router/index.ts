@@ -18,6 +18,7 @@ const router = createRouter({
         { path: 'conversations', name: 'Conversations', component: () => import('../views/Conversations.vue') },
         { path: 'memory', name: 'Memory', component: () => import('../views/Memory.vue') },
         { path: 'personas', name: 'Personas', component: () => import('../views/Personas.vue') },
+        { path: 'stickers', name: 'Stickers', component: () => import('../views/Stickers.vue') },
         { path: 'reminders', name: 'Reminders', component: () => import('../views/Reminders.vue') },
         { path: 'skills', name: 'Skills', component: () => import('../views/Skills.vue') },
         { path: 'config', name: 'Config', component: () => import('../views/Config.vue') },

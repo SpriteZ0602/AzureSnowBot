@@ -1,7 +1,7 @@
 # AGENTS.md — AzureSnowBot 开发指南
 
 > 本文件供 AI 编码工具（Copilot / Claude / Cursor 等）在新会话中快速理解项目。
-> 最后更新: 2026-04-07
+> 最后更新: 2026-10-22
 
 ---
 
@@ -83,6 +83,9 @@ data/
 │       ├── _chatlog.jsonl     #   （已废弃）迁移前旧记录，确认后可删
 │       └── personas/          #   群私有人格
 ├── personas/                  # 通用人格 prompt
+├── stickers/<gid>/            # 群表情库（同群人格共用，长期保留）
+│   ├── index.json             #   收藏 ID、标签、上传者和使用时间
+│   └── images/                #   哈希命名的图片，GIF 原样保存
 ├── skills/                    # 技能目录
 ├── mcp_servers.json
 └── reminders.json
@@ -106,6 +109,7 @@ FastAPI 子应用挂载到 NoneBot2 的 ASGI server（共享进程，直接调�
 | 人格管理 | `/personas` | 查看/创建/编辑/删除人格（通用 + 群私有） |
 | 提醒管理 | `/reminders` | 查看/取消提醒 |
 | 技能管理 | `/skills` | 查看/创建/编辑/删除技能 |
+| 表情包 | `/stickers` | 按群/标签分页浏览、GIF 预览、标签编辑/删除、自动配图开关和容量统计 |
 | 配置编辑 | `/config` | 编辑 .env 和 Admin 上下文文件 |
 
 **认证配置（.env）：**
@@ -140,6 +144,9 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 - 工具可设置 `@register_tool(chat_types=("group",))` 限制会话类型，分发时同时校验。
 - `plugins/sticker_reply.py` 每轮读取完整标签目录，放入末尾独立 system 上下文；最终回复末行 `[[sticker:标签1,标签2]]` 按标签交集选一张。标记不进入正文/历史；自动冷却 60 秒，Admin 关闭自动配图后自然语言明确索图仍可使用 `request_sticker`。
 - 群主对话、心跳、定时任务和插话共用发送附件。`send_chunked` / `send_chunked_raw` 接受可选 `sticker`、`persona`，`SendResult.sticker_result` 区分图片状态。文字和图片在同一发送锁内完成；图片单独发送并在 chatlog.db 中保存收藏 ID 关联，便于引用删除。失败/未知状态不会记成成功或自动重发。
+- Dashboard 路由 `plugins/dashboard/routes/stickers.py` 复用同一图库服务；`/api/v1/stickers` 的查询、图片和修改接口均受 JWT 认证保护。前端 `Stickers.vue` 配合 `StickerImage.vue` 使用鉴权 Blob 请求懒加载图片，不在图片 URL 中携带 Token。
+- 每群最多 64 个不同标签，每张最多 5 个、每个最多 16 字。下载上限 8 MiB，保存后上限 2 MiB；静态图片缩放压缩，GIF 不重编码。启动及每小时回收超过 24 小时的临时/孤立文件，已收藏图片不自动过期。
+- 部署需安装 `Pillow>=12.0,<14`，在 `web/` 执行 `npm ci`、`npm run build` 后重启 Bot；无需历史迁移或新增环境变量。前端构建分别检查 SPA 和 Vite 配置的类型。
 
 ### 消息分条发送（Chunker）
 发送函数返回 `SendResult(status, message_ids)`，`status` 为 `sent/failed/unknown`。
@@ -488,6 +495,7 @@ python -c "import ast; ast.parse(open('plugins/chat/proactive.py', encoding='utf
 - `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.pytest_tmp*/`, `.env`, `vendor/`, `reference/`
 - `good_persona/` — 人格草稿/备份目录，含敏感 prompt 内容
 - `data/sessions`, `data/groups`, `data/reminders.json`, `data/tool_calls.jsonl`, `data/tool_calls/`
+- `data/stickers/` — 群收藏索引和图片，需在服务器上单独备份
 - `data/admin/config.json`, `data/admin/history.jsonl`, `data/admin/SOUL.md`,
   `data/admin/token_stats.json`, `data/admin/.memory_index.json`, `data/admin/memories.jsonl`
 - `web/node_modules/`, `web/dist/`, `docs/`

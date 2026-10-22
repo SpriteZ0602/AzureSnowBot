@@ -35,6 +35,10 @@
           <el-icon><AlarmClock /></el-icon>
           <span>提醒管理</span>
         </el-menu-item>
+        <el-menu-item index="/stickers">
+          <el-icon><Picture /></el-icon>
+          <span>表情包</span>
+        </el-menu-item>
         <el-menu-item index="/skills">
           <el-icon><MagicStick /></el-icon>
           <span>技能管理</span>
@@ -86,6 +90,7 @@ const pageTitles: Record<string, string> = {
   '/conversations': '对话浏览器',
   '/memory': '记忆管理',
   '/personas': '人格管理',
+  '/stickers': '表情包',
   '/reminders': '提醒管理',
   '/skills': '技能管理',
   '/config': '配置编辑',
