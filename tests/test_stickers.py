@@ -350,7 +350,7 @@ async def test_user_requested_sticker_is_queued_when_automatic_is_off(sticker_to
 
 @pytest.fixture
 def commands(lib, monkeypatch):
-    matcher = types.SimpleNamespace(handle=lambda: lambda fn: fn, finish=AsyncMock())
+    matcher = types.SimpleNamespace(handle=lambda: lambda fn: fn, finish=AsyncMock(), send=AsyncMock())
     nonebot = types.ModuleType("nonebot")
     nonebot.on_message = lambda **kw: matcher
     nonebot.get_driver = lambda: types.SimpleNamespace(config=types.SimpleNamespace(admin_number="999"))
@@ -364,6 +364,7 @@ def commands(lib, monkeypatch):
     monkeypatch.setitem(sys.modules, "plugins.group.utils", types.SimpleNamespace(in_whitelist=lambda gid: True))
     mod = load("plugins.sticker_commands_under_test", "plugins/sticker_commands.py")
     mod.library = lib
+    mod.SEND_INTERVAL = 0
     return mod
 
 
@@ -402,8 +403,99 @@ async def test_list_unknown_stops_after_first_batch(commands, lib, monkeypatch):
     chunker._delivery_error = lambda exc: types.SimpleNamespace(status="unknown")
     chunker._remember_delivery = MagicMock()
     monkeypatch.setitem(sys.modules, "plugins.chunker", chunker)
-    assert await commands.send_list(bot, "123") == ("unknown", 0)
+    result = await commands.send_list(bot, "123")
+    assert result.status == "unknown" and result.batches == 0 and result.displayed == 0
     assert bot.call_api.await_count == 1
+
+
+@pytest.fixture
+def listing_sender(commands, monkeypatch):
+    chunker = types.ModuleType("plugins.chunker")
+    chunker._session_locks = {"g:123": asyncio.Lock()}
+    chunker._get_self_nickname = AsyncMock(return_value="Bot")
+    chunker._delivery_error = lambda exc: types.SimpleNamespace(status="unknown" if isinstance(exc, TimeoutError) else "failed")
+    chunker._remember_delivery = lambda kind, gid, response, *args: (response["message_id"],) if response.get("message_id") else ()
+    monkeypatch.setitem(sys.modules, "plugins.chunker", chunker)
+    return chunker
+
+
+def many_stickers(lib, count=73):
+    return [lib.add("123", picture(f"#{index:06x}"), ["兔子", "开心"] if index % 10 == 0 else ["兔子"])[0]
+            for index in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_list_sends_all_73_images_across_tags_and_batches(commands, lib, listing_sender):
+    many_stickers(lib)
+    delivered = {}
+    async def call(action, **params):
+        if action == "send_group_forward_msg":
+            mid = len(delivered) + 1
+            delivered[str(mid)] = params["messages"]
+            return {"message_id": mid}
+        assert action == "get_forward_msg"
+        # 标准节点回包；图片不经过普通引用的四图上限。
+        return {"messages": delivered[params["message_id"]]}
+    bot = types.SimpleNamespace(self_id=99, call_api=AsyncMock(side_effect=call))
+    result = await commands.send_list(bot, "123")
+    assert result.status == "sent" and result.unique == 73
+    assert result.displayed == result.total == 81
+    assert result.batches == 5 and all(len(nodes) <= 20 for nodes in delivered.values())
+    assert {commands._node_ordinal(node) for nodes in delivered.values() for node in nodes} == set(range(1, 82))
+
+
+@pytest.mark.asyncio
+async def test_list_repairs_only_confirmed_missing_nodes_after_silent_truncation(commands, lib, listing_sender):
+    many_stickers(lib, 20)
+    sent, delivered = [], {}
+    async def call(action, **params):
+        if action == "send_group_forward_msg":
+            nodes = params["messages"]
+            sent.append(nodes)
+            mid = str(len(sent))
+            delivered[mid] = nodes[:7] if len(sent) == 1 else nodes
+            return {"message_id": int(mid), "forward_id": mid}
+        # NapCat 回包形式，不是 node 包装形式。
+        return {"messages": [{"message": n["data"]["content"]} for n in delivered[params["message_id"]]]}
+    bot = types.SimpleNamespace(self_id=99, call_api=AsyncMock(side_effect=call))
+    result = await commands.send_list(bot, "123")
+    assert result.status == "sent" and result.displayed == result.total == 22
+    original = {commands._node_ordinal(n) for n in sent[0][:7]}
+    repaired = {commands._node_ordinal(n[0]) for n in sent[1:14]}
+    assert not original & repaired and len(repaired) == 13
+
+
+@pytest.mark.asyncio
+async def test_missing_local_file_does_not_hide_remaining_items(commands, lib, listing_sender):
+    entries = many_stickers(lib, 30)
+    lib.image_path("123", entries[7]).unlink()
+    delivered = {}
+    async def call(action, **params):
+        if action == "send_group_forward_msg":
+            mid = str(len(delivered) + 1)
+            delivered[mid] = params["messages"]
+            return {"message_id": int(mid)}
+        return {"messages": delivered[params["message_id"]]}
+    result = await commands.send_list(types.SimpleNamespace(self_id=99, call_api=AsyncMock(side_effect=call)), "123")
+    assert result.status == "failed" and result.missing == 1
+    assert result.displayed == result.total - 1 and result.batches == 2
+    assert any(commands._node_ordinal(n) > 20 for batch in delivered.values() for n in batch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["verification_error", "missing_id", "empty_verification"])
+async def test_unverifiable_delivery_never_resends(commands, lib, listing_sender, mode):
+    many_stickers(lib, 30)
+    async def call(action, **params):
+        if action == "send_group_forward_msg":
+            return {} if mode == "missing_id" else {"message_id": 1}
+        if mode == "verification_error":
+            raise TimeoutError()
+        return {"messages": []}
+    bot = types.SimpleNamespace(self_id=99, call_api=AsyncMock(side_effect=call))
+    result = await commands.send_list(bot, "123")
+    assert result.status == "unknown" and result.displayed == 0
+    assert sum(call.args[0] == "send_group_forward_msg" for call in bot.call_api.await_args_list) == 1
 
 
 @pytest.fixture
