@@ -91,7 +91,7 @@ async def handle_listen(event: GroupMessageEvent):
         enable = not get_listen_all(group_id)
 
     set_listen_all(group_id, enable)
-    state = "已开启：回复 @Bot 时加载全量群聊上下文。" if enable else "已关闭：仅记录 @Bot 消息。"
+    state = "已开启：回复 @Bot 时加载全量群聊上下文。" if enable else "已关闭：回复仅加载与 Bot 的对话，全量群记录仍保留。"
     await listen_cmd.finish(MessageSegment.reply(event.message_id) + f"全量上下文模式{state}")
 
 
@@ -391,7 +391,8 @@ async def handle_tarot(event: GroupMessageEvent):
 
 
 # ──────────────────── /help ────────────────────
-HELP_TEXT = """/persona — 列出所有人格
+HELP_TEXT = """群聊指令（除特别说明外，需要 @Bot）：
+/persona [list] — 列出本群可用人格
 /persona <名称> — 切换人格
 /persona info — 查看当前人格详情
 /persona reset — 清除当前人格的对话历史
@@ -403,13 +404,18 @@ HELP_TEXT = """/persona — 列出所有人格
 /compact — 压缩对话历史
 /取名 @某人 [条数] — 根据聊天记录起群昵称
 /塔罗 [牌数1-5] [问题] — 塔罗占卜（抽牌并解读）
-/reset — 清除当前对话历史
-/listen [on|off] — 切换全量上下文模式：开启后 @Bot 回复加载全量群聊消息（仅管理员）
-/主动对话 [群号] enable|disable — 切换群的主动对话（仅管理员）
-/白名单 list|add <群号>|delete <群号> — 管理群白名单（仅管理员）
-/bind <token> — 绑定水鱼查分 Token（查询自己成绩不被隐私遮蔽）
-/unbind — 解除水鱼 Token 绑定
-/help — 显示本帮助"""
+/reset — 清除当前人格的对话历史，不删除全量群记录或长期记忆
+/listen [on|off] — 回复时是否加载全量群聊上下文；省略参数切换（仅 Bot 管理员）
+/主动对话 [群号] enable|disable — 切换群的主动对话（仅 Bot 管理员）
+/白名单 list|add <群号>|delete <群号> — 管理群白名单（仅 Bot 管理员，可在未加白名单的群使用）
+/表情列表 — 按标签分批展示本群全部表情（无需 @Bot，多标签图片会重复展示）
+/bind <token> — 绑定本人的水鱼查分 Token（无需 @Bot，绑定后请撤回含 Token 的消息）
+/unbind — 解除本人的水鱼 Token 绑定（无需 @Bot）
+/help — 显示本帮助
+
+Admin 私聊专用：/自动表情 <群号> on|off — 开关该群自动配图；关闭后仍可明确索图。
+收藏、删除表情使用自然语言：引用图片并 @Bot 说“存成开心”或引用 Bot 单独发送的表情说“删除这张表情包”。
+也可直接说“把我刚才的一堆图片都存了”，自动标注并收藏本群本人此前 10 分钟的图片。"""
 
 help_cmd = on_fullmatch("/help", rule=is_group_event, priority=5, block=True)
 

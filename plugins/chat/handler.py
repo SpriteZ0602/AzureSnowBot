@@ -335,7 +335,7 @@ async def handle_listen_private(event: PrivateMessageEvent):
         await listen_cmd_private.finish("用法: /listen <群号> [on|off]")
 
     set_listen_all(target_gid, enable)
-    state = "已开启：回复 @Bot 时加载全量群聊上下文。" if enable else "已关闭：仅记录 @Bot 消息。"
+    state = "已开启：回复 @Bot 时加载全量群聊上下文。" if enable else "已关闭：回复仅加载与 Bot 的对话，全量群记录仍保留。"
     await listen_cmd_private.finish(f"群 {target_gid} 的{state}")
 
 
@@ -497,17 +497,22 @@ async def handle_tarot_private(event: PrivateMessageEvent):
 
 
 # ──────────────────── /help ────────────────────
-PRIVATE_HELP = """/reset — 清除对话历史
+PRIVATE_HELP = """Admin 私聊指令：
+/reset — 清除私聊对话历史，不删除长期记忆
 /compact — 压缩对话历史（自动提取记忆）
 /塔罗 [牌数1-5] [问题] — 塔罗占卜（抽牌并解读）
 /主动对话 enable|disable — 切换私聊主动对话（Bot 空闲时主动发消息）
 /主动对话 <群号> enable|disable — 切换指定群的主动对话
 /listen <群号> [on|off] — 切换指定群的全量上下文模式
 /chatter <群号> [on|off] — 开关指定群的复读与插话（不带群号查看各群状态）
+/自动表情 <群号> on|off — 开关该群自动配图；关闭后仍可明确索图
 /bind <token> — 绑定水鱼查分 Token（查询自己成绩不被隐私遮蔽）
 /unbind — 解除水鱼 Token 绑定
 /白名单 list|add <群号>|delete <群号> — 管理群白名单
-/help — 显示本帮助"""
+/help — 显示本帮助
+
+群聊专用：/表情列表 — 在群里发送，无需 @Bot，按标签分批展示该群全部表情。
+/persona、/skill、/取名 在群聊中 @Bot 使用。"""
 
 help_cmd = on_fullmatch("/help", rule=is_private_event, priority=10, block=True)
 
