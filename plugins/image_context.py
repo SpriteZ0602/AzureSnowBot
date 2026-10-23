@@ -12,7 +12,7 @@ from .message_parser import ImageRef, image_marker, _cached, _save
 
 _MARKER = re.compile(r"\[图片 (img_[0-9a-f]{20})，尚未识别\]")
 _REFRESH = re.compile(r"重新识别|重新看图|看原图|重读图片|再看(?:一下)?(?:原图|图片)")
-FAILURE_REPLY = "这次图片识别没有完成，请稍后重新引用图片试一下。"
+FAILURE_REPLY = "模型回复格式异常，未能提取正文；这次没有更新识图笔记。"
 
 
 def wants_image_refresh(text: str) -> bool:
@@ -85,18 +85,43 @@ def visual_instruction(images: list[ImageRef]) -> str:
 
 
 def decode_visual_response(content: str, images: list[ImageRef]) -> tuple[str, list[dict]]:
-    raw = content.strip()
+    if not isinstance(content, str):
+        return "", []
+    original = raw = content.strip()
     if raw.startswith("```"):
-        lines = raw.splitlines()
-        raw = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+        raw = re.sub(r"^```(?:json)?\s*\n?", "", raw, count=1).lstrip()
+    # 部分兼容网关不严格遵守 json_object；正文中未转义换行也不应丢掉整份回复。
+    decoder = json.JSONDecoder(strict=False)
     try:
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
+        payload, end = decoder.raw_decode(raw)
+    except json.JSONDecodeError as exc:
+        structured = raw.startswith("{") or bool(re.match(r'^\[\s*(?:\{|"|\])', raw))
+        if not structured:
+            # 模型正常用自然语言回答时直接保留，不把“没生成笔记”误报为“没识别图片”。
+            return original, []
+        # 笔记段被截断时，仍可安全提取完整的 reply 字符串，不输出残缺 JSON。
+        match = re.search(r'"reply"\s*:\s*', raw)
+        if match:
+            try:
+                reply, _ = decoder.raw_decode(raw[match.end():])
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(reply, str) and reply.strip():
+                    logger.warning("识图笔记格式不完整，已保留完整回复正文，未更新笔记")
+                    return reply.strip(), []
+        logger.warning(f"识图回复格式异常: {exc.msg}，位置 {exc.pos}，长度 {len(raw)}；未输出原始 JSON")
         return "", []
     if not isinstance(payload, dict):
         return "", []
     reply = payload.get("reply")
     reply = reply.strip() if isinstance(reply, str) else ""
+    # 容忍网关/模型在 JSON 外追加控制标记；仍由发送层校验标签和约定位置。
+    suffix = raw[end:].strip()
+    if suffix.startswith("```"):
+        suffix = suffix[3:].strip()
+    if reply and re.fullmatch(r"\[\[sticker:[^\]\n]+\]\]", suffix):
+        reply += "\n" + suffix
     notes, seen = [], set()
     candidates = payload.get("image_notes")
     if isinstance(candidates, list):

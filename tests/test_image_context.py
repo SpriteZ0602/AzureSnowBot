@@ -51,6 +51,18 @@ def test_invalid_json_is_not_forwarded_as_a_reply(raw):
     assert images.decode_visual_response(raw, [ImageRef(IID, "https://x/image")]) == ("", [])
 
 
+@pytest.mark.parametrize("raw,expected", [
+    ("图片上写着 ABC-731，是一只兔子。", "图片上写着 ABC-731，是一只兔子。"),
+    ('{"reply":"第一行\n第二行","image_notes":[]}', "第一行\n第二行"),
+    ('{"reply":"已经看到了兔子","image_notes":[', "已经看到了兔子"),
+    ('```json\n{"reply":"兔子","image_notes":[]}\n```', "兔子"),
+    ('{"reply":"兔子","image_notes":[]}\n[[sticker:兔子]]', "兔子\n[[sticker:兔子]]"),
+    ('```json\n{"reply":"兔子","image_notes":[]}\n```\n[[sticker:兔子]]', "兔子\n[[sticker:兔子]]"),
+])
+def test_visual_reply_format_deviations_keep_usable_answer(raw, expected):
+    assert images.decode_visual_response(raw, [ImageRef(IID, "https://x/image")]) == (expected, [])
+
+
 def test_atomic_replacement_preserves_new_messages_and_other_images(tmp_path):
     path = tmp_path / "history.jsonl"
     other = image_marker("img_" + "b" * 20)
@@ -318,7 +330,7 @@ async def test_real_handler_collects_quote_through_tool_without_keyword_gate(gro
     llm.side_effect = answer
     await handler._handle_group_chat(event, "123", "cat", user_request)
     assert llm.await_count == 2 and sent.await_count == 1
-    if reply_format == "json" or cached_reference:
+    if reply_format in ("json", "text", "outside_marker") or cached_reference:
         assert sent.await_args.args[2] == ["存好了，标签是兔子"]
     else:
         reply, = sent.await_args.args[2]
@@ -361,6 +373,16 @@ async def test_real_handler_invalid_json_keeps_placeholder(group_handler):
     await handler._handle_group_chat(event, "123", "cat", "看图")
     assert sent.await_args.args[2] == [images.FAILURE_REPLY]
     assert "尚未识别" in load_jsonl_history(path("123", "cat"))[0]["content"]
+
+
+async def test_plain_visual_answer_is_sent_without_false_failure_or_fake_note(group_handler):
+    handler, event, llm, sent, _, path = group_handler
+    llm.return_value = {"choices": [{"message": {"content": "图里是一只兔子，上面写着开心。"}}]}
+    await handler._handle_group_chat(event, "123", "cat", "图里有什么？")
+    assert sent.await_args.args[2] == ["图里是一只兔子，上面写着开心。"]
+    saved = load_jsonl_history(path("123", "cat"))
+    assert "尚未识别" in saved[0]["content"]
+    assert images.FAILURE_REPLY not in str(saved)
 
 
 async def test_empty_plain_reply_without_images_does_not_report_vision_failure(group_handler):
