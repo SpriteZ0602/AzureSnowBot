@@ -58,6 +58,47 @@ def test_gif_bytes_and_animation_survive_reload(lib):
     assert reloaded.get("123", item["id"])["tags"] == ["猫", "开心"]
 
 
+def test_recollection_merges_but_tag_edit_replaces_and_keeps_id_and_file(lib):
+    raw = picture()
+    item, _ = lib.add("123", raw, ["猫", "开心"])
+    again, created = lib.add("123", raw, ["兔子"])
+    assert not created and again["id"] == item["id"]
+    assert again["tags"] == ["猫", "开心", "兔子"]
+    path = lib.image_path("123", item)
+    before = path.read_bytes()
+    changed = lib.update_tags("123", item["id"], ["狗"])
+    assert changed["id"] == item["id"] and changed["tags"] == ["狗"]
+    assert len(lib.items("123")) == 1 and path.read_bytes() == before
+    assert lib.tag_counts("123") == {"狗": 1}
+    assert lib.select("123", ["猫"]) is None
+
+
+def test_replace_one_tag_preserves_others_and_enforces_limits(lib, monkeypatch):
+    item, _ = lib.add("123", picture(), ["猫", "开心"])
+    assert lib.update_tags("123", item["id"], ["兔子"], old_tag="猫")["tags"] == ["兔子", "开心"]
+    with pytest.raises(lib.StickerError):
+        lib.update_tags("123", item["id"], ["狗"], old_tag="不存在")
+    monkeypatch.setattr(lib, "MAX_TAGS", 2)
+    with pytest.raises(lib.StickerError):
+        lib.update_tags("123", item["id"], ["狗", "伤心"], old_tag="兔子")
+    assert lib.get("123", item["id"])["tags"] == ["兔子", "开心"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_find_by_original_and_sent_bytes_without_cross_group_or_guessing(lib, legacy):
+    raw = picture()
+    item, _ = lib.add("123", raw, ["猫"])
+    saved = lib.read_image("123", item["id"])[1]
+    if legacy:
+        index = lib._load("123")
+        index["items"][0].pop("file_hash")
+        lib._save("123", index)
+    assert lib.find_by_content("123", raw)["id"] == item["id"]
+    assert lib.find_by_content("123", saved)["id"] == item["id"]
+    with pytest.raises(lib.StickerError):
+        lib.find_by_content("456", raw)
+
+
 def test_duplicate_merges_tags_without_copy_and_other_group_isolated(lib):
     item, _ = lib.add("123", picture(), ["猫"])
     merged, created = lib.add("123", picture(), ["开心"])
@@ -208,6 +249,53 @@ def sticker_tools(lib, monkeypatch):
     return mod
 
 
+@pytest.mark.asyncio
+async def test_update_quoted_bot_sticker_replaces_tags_without_downloading(sticker_tools, lib, monkeypatch):
+    item, _ = lib.add("123", picture(), ["猫", "开心"])
+    store = types.SimpleNamespace(get_context=lambda gid, ref: {"kind": "sticker", "sticker_id": item["id"]})
+    monkeypatch.setitem(sys.modules, "plugins.message_store", store)
+    ctx = {"_chat_type": "group", "_target_id": "123", "_sticker_user_turn": True, "_quoted_message_id": 77}
+    result = await sticker_tools.update_quoted_sticker_tags(["兔子"], _context=ctx)
+    assert result.startswith("已修改表情") and lib.get("123", item["id"])["tags"] == ["兔子"]
+    result = await sticker_tools.update_quoted_sticker_tags(["狗"], old_tag="兔子", _context=ctx)
+    assert result.startswith("已修改表情") and lib.get("123", item["id"])["tags"] == ["狗"]
+    assert len(lib.items("123")) == 1
+
+
+@pytest.mark.asyncio
+async def test_old_bot_reference_never_edits_recollected_image(sticker_tools, lib, monkeypatch):
+    raw = picture()
+    old, _ = lib.add("123", raw, ["猫"])
+    lib.delete("123", old["id"])
+    new, _ = lib.add("123", raw, ["兔子"])
+    monkeypatch.setitem(sys.modules, "plugins.message_store", types.SimpleNamespace(
+        get_context=lambda gid, ref: {"kind": "sticker", "sticker_id": old["id"]}))
+    ctx = {"_chat_type": "group", "_target_id": "123", "_sticker_user_turn": True,
+           "_quoted_message_id": 77, "_quoted_sticker_urls": ["https://example/original"]}
+    result = await sticker_tools.update_quoted_sticker_tags(["狗"], _context=ctx)
+    assert "已经删除" in result and lib.get("123", new["id"])["tags"] == ["兔子"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context", [
+    {"_chat_type": "private", "_sticker_user_turn": True},
+    {"_chat_type": "group"},
+    {"_chat_type": "group", "_sticker_user_turn": True},
+])
+async def test_update_tags_requires_current_group_turn_and_quote(sticker_tools, context):
+    assert (await sticker_tools.update_quoted_sticker_tags(["兔子"], _context=context)).startswith("[错误]")
+
+
+@pytest.mark.asyncio
+async def test_update_tags_rejects_cross_group_sticker_id(sticker_tools, lib, monkeypatch):
+    item, _ = lib.add("456", picture(), ["猫"])
+    monkeypatch.setitem(sys.modules, "plugins.message_store", types.SimpleNamespace(
+        get_context=lambda gid, ref: {"kind": "sticker", "sticker_id": item["id"]}))
+    ctx = {"_chat_type": "group", "_target_id": "123", "_sticker_user_turn": True, "_quoted_message_id": 77}
+    assert (await sticker_tools.update_quoted_sticker_tags(["兔子"], _context=ctx)).startswith("[错误]")
+    assert lib.get("456", item["id"])["tags"] == ["猫"]
+
+
 @pytest.fixture
 def batch_quote(sticker_tools, lib, monkeypatch, tmp_path):
     parser = load("plugins.message_parser_sticker_batch_test", "plugins/message_parser.py")
@@ -232,6 +320,40 @@ def batch_quote(sticker_tools, lib, monkeypatch, tmp_path):
     ctx = {"_chat_type": "group", "_target_id": "123", "_user_id": "99", "_sticker_user_turn": True,
            "_quoted_message_id": 77, "_quoted_sticker_urls": [seg["data"]["url"] for seg in raw[:4]]}
     return bot, raw, bodies, downloads, ctx
+
+
+@pytest.mark.asyncio
+async def test_update_original_quote_matches_hash_cleans_temp_and_does_not_add(sticker_tools, lib, batch_quote):
+    bot, raw, bodies, downloads, ctx = batch_quote
+    bot.get_msg.return_value = {"message": raw[:1], "group_id": 123, "sender": {"user_id": 5}}
+    item, _ = lib.add("123", bodies["0"], ["猫", "开心"])
+    ctx["_quoted_sticker_urls"] = ["https://qq.example/0"]
+    result = await sticker_tools.update_quoted_sticker_tags(["兔子"], old_tag="猫", _context=ctx)
+    assert result.startswith("已修改表情") and downloads == ["0"]
+    assert lib.get("123", item["id"])["tags"] == ["兔子", "开心"]
+    assert len(lib.items("123")) == 1 and not list(lib.ROOT.rglob(".download-*.tmp"))
+
+
+@pytest.mark.asyncio
+async def test_update_quote_rejects_multiple_images_and_unknown_image(sticker_tools, lib, batch_quote):
+    bot, raw, _, downloads, ctx = batch_quote
+    assert (await sticker_tools.update_quoted_sticker_tags(["兔子"], _context=ctx)).startswith("[错误]")
+    assert downloads == []
+    bot.get_msg.return_value = {"message": raw[:1]}
+    ctx["_quoted_sticker_urls"] = ["https://qq.example/0"]
+    assert (await sticker_tools.update_quoted_sticker_tags(["兔子"], _context=ctx)).startswith("[错误]")
+    assert lib.items("123") == []
+
+
+@pytest.mark.asyncio
+async def test_unmapped_old_bot_quote_never_falls_back_to_same_image_hash(sticker_tools, lib, batch_quote):
+    bot, raw, bodies, downloads, ctx = batch_quote
+    bot.self_id = 100
+    bot.get_msg.return_value = {"message": raw[:1], "sender": {"user_id": 100}}
+    item, _ = lib.add("123", bodies["0"], ["兔子"])
+    result = await sticker_tools.update_quoted_sticker_tags(["狗"], _context=ctx)
+    assert "关联已失效" in result and downloads == []
+    assert lib.get("123", item["id"])["tags"] == ["兔子"]
 
 
 @pytest.mark.asyncio
@@ -548,6 +670,9 @@ def sender(lib, tmp_path, monkeypatch):
     import plugins
     monkeypatch.setattr(plugins, "stickers", lib, raising=False)
     monkeypatch.setitem(sys.modules, "plugins.stickers", lib)
+    adapter = types.ModuleType("nonebot.adapters.onebot.v11")
+    adapter.Bot, adapter.Message, adapter.MessageSegment = object, MagicMock(), MagicMock()
+    monkeypatch.setitem(sys.modules, adapter.__name__, adapter)
     mod = load("plugins.chunker_sticker_test", "plugins/chunker.py")
     monkeypatch.setattr(mod, "Message", lambda value: value)
     monkeypatch.setattr(mod, "MessageSegment", types.SimpleNamespace(

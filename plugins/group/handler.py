@@ -318,7 +318,7 @@ async def _handle_group_chat(
                     else:
                         tool_result = await call_tool(fn_name, fn_args)
 
-                if fn_name in ("local__save_quoted_sticker", "local__delete_quoted_sticker", "local__save_recent_stickers"):
+                if fn_name in ("local__save_quoted_sticker", "local__delete_quoted_sticker", "local__save_recent_stickers", "local__update_quoted_sticker_tags"):
                     sticker_results.append(tool_result)
 
                 from ..tool_log import log_tool_call

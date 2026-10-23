@@ -167,6 +167,25 @@ def content_hash(raw: bytes | Path) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def find_by_content(gid: str, raw: bytes | Path) -> dict:
+    """仅在本群匹配原文件或发送文件；不做视觉相似猜测。"""
+    digest = content_hash(raw)
+    size = raw.stat().st_size if isinstance(raw, Path) else len(raw)
+    with _lock:
+        matches = []
+        for item in _load(gid)["items"]:
+            if digest in (item["hash"], item.get("file_hash")):
+                matches.append(item)
+            elif not item.get("file_hash") and item["size"] == size:
+                # 旧索引没有发送文件哈希；只核对大小一致的文件，不要求数据迁移。
+                path = image_path(gid, item)
+                if path.is_file() and content_hash(path) == digest:
+                    matches.append(item)
+        if len(matches) != 1:
+            raise StickerError("找不到唯一对应的本群收藏，请引用 Bot 单独发送的表情后再修改")
+        return dict(matches[0])
+
+
 def add(gid: str, raw: bytes | Path, tags: list[str], uploader: str = "", description: str = "") -> tuple[dict, bool]:
     tags = normalize_tags(tags)
     content, ext, mime = _prepare(raw)
@@ -188,7 +207,8 @@ def add(gid: str, raw: bytes | Path, tags: list[str], uploader: str = "", descri
             raise StickerLimitError("所有群图库已达到 5 GB 上限，请先清理")
         directory = group_dir(gid) / "images"
         directory.mkdir(parents=True, exist_ok=True)
-        item = {"id": uuid.uuid4().hex, "hash": digest, "file": f"{digest}.{ext}", "mime": mime,
+        item = {"id": uuid.uuid4().hex, "hash": digest, "file_hash": digest if content is raw else content_hash(content),
+                "file": f"{digest}.{ext}", "mime": mime,
                 "tags": tags, "description": str(description)[:300], "uploader": str(uploader),
                 "size": size, "created_at": time.time(), "last_used_at": None}
         path = image_path(gid, item)
@@ -266,13 +286,18 @@ async def collect(gid: str, url: str, tags: list[str], uploader: str = "", descr
         return await run_file_task(add, gid, temp, tags, uploader, description)
 
 
-def update_tags(gid: str, sticker_id: str, tags: list[str]) -> dict:
+def update_tags(gid: str, sticker_id: str, tags: list[str], *, old_tag: str | None = None) -> dict:
     tags = normalize_tags(tags)
     with _lock:
         data = _load(gid)
         item = next((i for i in data["items"] if i["id"] == sticker_id), None)
         if not item:
             raise StickerError("这张表情包已经删除")
+        if old_tag is not None:
+            old_tag = normalize_tags([old_tag])[0]
+            if old_tag not in item["tags"]:
+                raise StickerError("这张表情没有指定的旧标签，未修改")
+            tags = normalize_tags([new for tag in item["tags"] for new in (tags if tag == old_tag else [tag])])
         _check_tags(data, tags, sticker_id)
         item["tags"] = tags
         _save(gid, data)

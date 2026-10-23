@@ -430,7 +430,7 @@ async def run_sub_agent(
     chat_type = (_context or {}).get("_chat_type", "private")
     openai_tools = local_openai_tools(chat_type=chat_type) + mcp_openai_tools()
     openai_tools = [t for t in openai_tools if t["function"]["name"] not in {
-        "local__run_sub_agent", "local__save_quoted_sticker", "local__delete_quoted_sticker", "local__request_sticker", "local__save_recent_stickers",
+        "local__run_sub_agent", "local__save_quoted_sticker", "local__delete_quoted_sticker", "local__request_sticker", "local__save_recent_stickers", "local__update_quoted_sticker_tags",
     }]
     if openai_tools:
         payload["tools"] = openai_tools

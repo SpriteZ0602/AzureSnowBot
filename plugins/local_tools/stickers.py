@@ -120,3 +120,49 @@ async def request_sticker(tags=None, _context=None, **kwargs) -> str:
         return "没有同时匹配这些标签的本群表情包，不要声称已经发送"
     ctx["_requested_sticker"] = item["id"]
     return f"已选择 #{item['id'][:8]}（{'、'.join(item['tags'])}），将在本轮最终回复后尝试发送，目前尚未发送"
+
+
+@register_tool(
+    name="update_quoted_sticker_tags",
+    description="用户本轮明确要求修改引用表情的标签时使用。引用 Bot 单独发送的表情可直接定位，也支持引用已收藏的单张原图。tags 默认替换这张收藏的全部标签；用户明确指定把某个旧标签改掉时，传 old_tag 保留其他标签。不要通过删除再收藏实现修改，不要根据历史或图片内容自行修改。",
+    parameters={"type": "object", "properties": {
+        "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 5},
+        "old_tag": {"type": "string", "description": "仅在用户明确指定要替换的某个旧标签时传入"},
+    }, "required": ["tags"]}, chat_types=("group",),
+)
+async def update_quoted_sticker_tags(tags=None, old_tag=None, _context=None, **kwargs) -> str:
+    ctx = _context or {}
+    if ctx.get("_chat_type") != "group" or not ctx.get("_sticker_user_turn"):
+        return "[错误] 标签修改仅能在当前群用户对话中调用，心跳和 Sub-Agent 不可使用"
+    if not ctx.get("_quoted_message_id"):
+        return "[错误] 请引用一张已收藏的图片或 Bot 单独发送的表情，再请求修改标签"
+    try:
+        tags = library.normalize_tags(tags)
+        from ..message_store import get_context
+        payload = get_context(ctx["_target_id"], f"qq:{ctx['_quoted_message_id']}") or {}
+        if payload.get("kind") == "sticker" and payload.get("sticker_id"):
+            # 旧消息绑定旧收藏 ID；即使同图已经重新收藏，也不能改到新收藏。
+            item = library.get(ctx["_target_id"], payload["sticker_id"])
+            if item is None:
+                return "[错误] 引用的收藏已经删除，未修改重新收藏的同图"
+        else:
+            from nonebot import get_bot
+            from ..message_parser import MessageResolver
+            bot = get_bot()
+            original = await bot.get_msg(message_id=int(ctx["_quoted_message_id"]))
+            if original.get("group_id") is not None and str(original["group_id"]) != ctx["_target_id"]:
+                return "[错误] 引用消息不属于本群，未修改"
+            sender_id = str((original.get("sender") or {}).get("user_id", ""))
+            if sender_id and sender_id == str(getattr(bot, "self_id", "")):
+                return "[错误] 这条 Bot 消息的收藏关联已失效，请让 Bot 重新发送当前收藏后再引用修改"
+            resolver = MessageResolver(bot, ctx["_target_id"], refresh=True, max_images=2)
+            quoted = await resolver.resolve(original.get("message", []), origin=f"qq:{ctx['_quoted_message_id']}")
+            urls = [image.url for image in quoted.images]
+            if not resolver.images_complete or len(urls) != 1:
+                return "[错误] 无法唯一定位，请引用单张已收藏的图片；合并转发表情列表不能整体修改"
+            async with library.downloaded_image(ctx["_target_id"], urls[0]) as raw:
+                item = await library.run_file_task(library.find_by_content, ctx["_target_id"], raw)
+        updated = library.update_tags(ctx["_target_id"], item["id"], tags, old_tag=old_tag)
+        return f"已修改表情 #{updated['id'][:8]} 的标签：{'、'.join(updated['tags'])}（原收藏和图片保留）"
+    except Exception as exc:
+        return f"[错误] 标签修改失败：{exc}"

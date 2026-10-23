@@ -349,6 +349,7 @@ async def test_real_handler_collects_quote_through_tool_without_keyword_gate(gro
     ("save_quoted_sticker", "[错误] 收藏失败：图片格式不支持"),
     ("save_quoted_sticker", "[错误] 批量收藏未全部完成：新收藏 2 张，失败 1 张，未处理 0 张"),
     ("delete_quoted_sticker", "已删除这张表情包及其全部标签关联"),
+    ("update_quoted_sticker_tags", "已修改表情 #1234 的标签：兔子（原收藏和图片保留）"),
 ])
 async def test_invalid_visual_reply_preserves_sticker_failures_and_partial_results(group_handler, tool_name, result):
     handler, event, llm, sent, _, path = group_handler
