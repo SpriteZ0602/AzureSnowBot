@@ -7,6 +7,7 @@ import pytest
 
 from tests.test_compaction import (
     COMPACTION_THRESHOLD,
+    _mod,
     _make_large_messages,
     compact_history,
 )
@@ -37,7 +38,7 @@ async def test_preserves_messages_appended_while_compacting(tmp_path):
             file.write(json.dumps(late_message, ensure_ascii=False) + "\n")
         return "压缩后的对话摘要"
 
-    with patch("plugins.chat.compaction._call_llm", side_effect=fake_llm):
+    with patch.object(_mod, "_call_llm", side_effect=fake_llm):
         result = await compact_history("test", session, memory)
 
     assert result is True
@@ -63,7 +64,7 @@ async def test_does_not_restore_history_reset_while_compacting(tmp_path):
         session.unlink()
         return "不应写回的摘要"
 
-    with patch("plugins.chat.compaction._call_llm", side_effect=fake_llm):
+    with patch.object(_mod, "_call_llm", side_effect=fake_llm):
         result = await compact_history("test", session, memory)
 
     assert result is False

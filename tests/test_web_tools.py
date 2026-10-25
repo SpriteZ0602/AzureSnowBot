@@ -101,8 +101,8 @@ def _patch_httpx(handler):
 
 @pytest.fixture(autouse=True)
 def _config():
-    with patch(
-        "plugins.llm.get_deepseek_tools_config",
+    with patch.object(
+        sys.modules["plugins.llm"], "get_deepseek_tools_config",
         return_value=("test-key", _API_BASE),
     ):
         yield
@@ -176,7 +176,7 @@ class TestDeepSeekSearch:
             await _deepseek_search("q", 5)
 
     async def test_missing_key_raises(self):
-        with patch("plugins.llm.get_deepseek_tools_config", return_value=("", "")):
+        with patch.object(sys.modules["plugins.llm"], "get_deepseek_tools_config", return_value=("", "")):
             with pytest.raises(RuntimeError):
                 await _deepseek_search("q", 5)
 
@@ -239,7 +239,7 @@ class TestDeepSeekFetch:
         assert "读取网页失败" in out
 
     async def test_missing_key_returns_error(self):
-        with patch("plugins.llm.get_deepseek_tools_config", return_value=("", "")):
+        with patch.object(sys.modules["plugins.llm"], "get_deepseek_tools_config", return_value=("", "")):
             out = await _deepseek_fetch("https://example.com/a")
         assert "未配置 DeepSeek API Key" in out
 

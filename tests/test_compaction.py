@@ -320,7 +320,7 @@ class TestCompactHistory:
         original_count = len(msgs)
 
         # Mock LLM 调用
-        with patch("plugins.chat.compaction._call_llm", new_callable=AsyncMock) as mock_llm:
+        with patch.object(_mod, "_call_llm", new_callable=AsyncMock) as mock_llm:
             # 第一次调用：记忆提取
             # 第二次调用：摘要生成
             mock_llm.side_effect = [
@@ -357,7 +357,7 @@ class TestCompactHistory:
             for m in msgs:
                 f.write(json.dumps(m, ensure_ascii=False) + "\n")
 
-        with patch("plugins.chat.compaction._call_llm", new_callable=AsyncMock) as mock_llm:
+        with patch.object(_mod, "_call_llm", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = [
                 "无",   # extract_memories: nothing
                 None,   # generate_summary: failure
@@ -382,7 +382,7 @@ class TestCompactHistory:
             for m in msgs:
                 f.write(json.dumps(m, ensure_ascii=False) + "\n")
 
-        with patch("plugins.chat.compaction._call_llm", new_callable=AsyncMock) as mock_llm:
+        with patch.object(_mod, "_call_llm", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = [
                 "无",                              # extract_memories
                 "对话摘要：讨论了各种内容。",       # generate_summary
