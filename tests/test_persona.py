@@ -59,6 +59,35 @@ def isolated_dirs(tmp_path):
 
 # ──────────────────── 列出人格 ────────────────────
 
+@pytest.mark.parametrize("name", ["../../../../personas/default", "../other", "..\\other", "C:\\other", "/tmp/other", "NUL"])
+def test_persona_paths_reject_escape(name):
+    victim = pm.GLOBAL_PERSONA_DIR / "default.txt"
+    victim.write_text("protected", encoding="utf-8")
+    for operation in (
+        lambda: pm.is_group_persona(name, "123"),
+        lambda: pm.delete_group_persona("123", name),
+        lambda: pm.create_group_persona("123", name, "overwrite"),
+        lambda: pm.load_persona_prompt(name, "123"),
+        lambda: pm.set_active_persona("123", name),
+        lambda: pm._session_path("123", name),
+    ):
+        with pytest.raises(ValueError):
+            operation()
+    assert victim.read_text(encoding="utf-8") == "protected"
+
+
+def test_persona_symlink_cannot_delete_outside_file(tmp_path):
+    victim = tmp_path / "outside.txt"
+    victim.write_text("protected", encoding="utf-8")
+    link = pm._group_persona_dir("123") / "linked.txt"
+    try:
+        link.symlink_to(victim)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(ValueError):
+        pm.delete_group_persona("123", "linked")
+    assert victim.exists()
+
 class TestListPersonas:
     """测试人格列表"""
 

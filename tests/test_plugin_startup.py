@@ -55,6 +55,7 @@ print("startup verified:", first)
 def test_real_plugin_loading_is_order_independent(first, tmp_path):
     # NoneBot 要求插件位于 cwd 下；复制源码以隔离模块 __file__ 派生的数据路径。
     shutil.copytree(ROOT / "plugins", tmp_path / "plugins", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(ROOT / "botcore", tmp_path / "botcore", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     env = os.environ.copy()
     env.update({
         "PYTHONPATH": str(tmp_path),

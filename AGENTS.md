@@ -1,7 +1,7 @@
 # AGENTS.md — AzureSnowBot 开发指南
 
 > 本文件供 AI 编码工具（Copilot / Claude / Cursor 等）在新会话中快速理解项目。
-> 最后更新: 2026-10-25
+> 最后更新: 2026-10-26
 
 ---
 
@@ -516,3 +516,7 @@ python -c "import ast; ast.parse(open('plugins/chat/proactive.py', encoding='utf
 - `web/node_modules/`, `web/dist/`, `docs/`
 
 > 注：`docs/` 是被忽略的，本 AGENTS.md 因位于仓库根目录才纳入版本控制。
+
+### 共用服务边界
+
+- `botcore/` 不注册 NoneBot 插件。`botcore.paths` 是人格及 Dashboard 文件入口共用的名称、数字群号和符号链接目录边界校验；不能把原始人格名直接拼进路径。

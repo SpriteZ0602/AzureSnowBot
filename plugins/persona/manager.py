@@ -19,6 +19,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from nonebot.log import logger
+from botcore.paths import confined_path, validate_group_id, validate_name
 
 from ..history_io import append_jsonl_message, clear_jsonl_history, load_jsonl_history
 
@@ -38,7 +39,7 @@ DEFAULT_PERSONA = "default"
 
 def group_memory_path(group_id: str) -> Path:
     """群长期记忆 MEMORY.md 路径（data/groups/<群号>/MEMORY.md）"""
-    return GROUP_MEMORY_DIR / str(group_id) / "MEMORY.md"
+    return confined_path(GROUP_MEMORY_DIR, validate_group_id(str(group_id)), "MEMORY.md")
 
 
 def load_group_memory(group_id: str, max_chars: int = 3000) -> str:
@@ -61,9 +62,14 @@ def load_group_memory(group_id: str, max_chars: int = 3000) -> str:
 # ──────────────────── 路径工具 ────────────────────
 
 def _group_persona_dir(group_id: str) -> Path:
-    d = GROUP_SESSION_DIR / group_id / "personas"
+    group = confined_path(GROUP_SESSION_DIR, validate_group_id(group_id))
+    d = confined_path(group, "personas")
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _persona_path(base: Path, name: str) -> Path:
+    return confined_path(base, f"{validate_name(name)}.txt")
 
 
 # ──────────────────── Persona 定义 ────────────────────
@@ -88,25 +94,25 @@ def list_personas(group_id: str) -> list[str]:
 def persona_exists(name: str, group_id: str | None = None) -> bool:
     """检查人格是否存在（群私有优先）"""
     if group_id:
-        if (_group_persona_dir(group_id) / f"{name}.txt").exists():
+        if _persona_path(_group_persona_dir(group_id), name).exists():
             return True
-    return (GLOBAL_PERSONA_DIR / f"{name}.txt").exists()
+    return _persona_path(GLOBAL_PERSONA_DIR, name).exists()
 
 
 def is_group_persona(name: str, group_id: str) -> bool:
     """检查是否为群私有人格"""
-    return (_group_persona_dir(group_id) / f"{name}.txt").exists()
+    return _persona_path(_group_persona_dir(group_id), name).exists()
 
 
 def is_global_persona(name: str) -> bool:
     """检查是否为通用人格"""
-    return (GLOBAL_PERSONA_DIR / f"{name}.txt").exists()
+    return _persona_path(GLOBAL_PERSONA_DIR, name).exists()
 
 
 def load_persona_prompt(name: str, group_id: str | None = None) -> str | None:
     """加载人格 prompt，自动拼装 _base.txt 公共指令 + 人格内容"""
     # 加载公共基底提示词
-    base_path = GLOBAL_PERSONA_DIR / "_base.txt"
+    base_path = _persona_path(GLOBAL_PERSONA_DIR, "_base")
     base_prompt = ""
     if base_path.exists():
         base_prompt = base_path.read_text(encoding="utf-8").strip()
@@ -114,11 +120,11 @@ def load_persona_prompt(name: str, group_id: str | None = None) -> str | None:
     # 加载人格提示词（群私有优先）
     persona_prompt = None
     if group_id:
-        group_path = _group_persona_dir(group_id) / f"{name}.txt"
+        group_path = _persona_path(_group_persona_dir(group_id), name)
         if group_path.exists():
             persona_prompt = group_path.read_text(encoding="utf-8").strip()
     if persona_prompt is None:
-        global_path = GLOBAL_PERSONA_DIR / f"{name}.txt"
+        global_path = _persona_path(GLOBAL_PERSONA_DIR, name)
         if global_path.exists():
             persona_prompt = global_path.read_text(encoding="utf-8").strip()
     if persona_prompt is None:
@@ -134,13 +140,13 @@ def load_persona_prompt(name: str, group_id: str | None = None) -> str | None:
 
 def create_group_persona(group_id: str, name: str, prompt: str) -> None:
     """创建群私有人格"""
-    path = _group_persona_dir(group_id) / f"{name}.txt"
+    path = _persona_path(_group_persona_dir(group_id), name)
     path.write_text(prompt.strip(), encoding="utf-8")
 
 
 def delete_group_persona(group_id: str, name: str) -> bool:
     """删除群私有人格，返回是否成功"""
-    path = _group_persona_dir(group_id) / f"{name}.txt"
+    path = _persona_path(_group_persona_dir(group_id), name)
     if path.exists():
         path.unlink()
         return True
@@ -150,7 +156,7 @@ def delete_group_persona(group_id: str, name: str) -> bool:
 # ──────────────────── 群激活状态 ────────────────────
 
 def _group_dir(group_id: str) -> Path:
-    d = GROUP_SESSION_DIR / group_id
+    d = confined_path(GROUP_SESSION_DIR, validate_group_id(group_id))
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -182,7 +188,7 @@ def get_group_config(group_id: str) -> dict:
 
 
 def _session_path(group_id: str, persona_name: str) -> Path:
-    return _group_dir(group_id) / f"{persona_name}.jsonl"
+    return confined_path(_group_dir(group_id), f"{validate_name(persona_name)}.jsonl")
 
 
 def get_active_persona(group_id: str) -> str:
@@ -193,6 +199,7 @@ def get_active_persona(group_id: str) -> str:
 
 def set_active_persona(group_id: str, persona_name: str) -> None:
     """设置该群激活的人格"""
+    validate_name(persona_name)
     config = _load_group_config(group_id)
     config["active_persona"] = persona_name
     _save_group_config(group_id, config)

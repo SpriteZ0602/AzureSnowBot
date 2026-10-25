@@ -27,6 +27,13 @@ persona_cmd = on_startswith("/persona", priority=5, block=True)
 
 @persona_cmd.handle()
 async def handle_persona(event: GroupMessageEvent):
+    try:
+        await _handle_persona(event)
+    except ValueError as exc:
+        await persona_cmd.finish(MessageSegment.reply(event.message_id) + str(exc))
+
+
+async def _handle_persona(event: GroupMessageEvent):
     # 权限检查
     if not in_whitelist(event.group_id):
         return
@@ -38,6 +45,15 @@ async def handle_persona(event: GroupMessageEvent):
 
     # 解析子命令：去掉 "/persona" 前缀后取参数
     args = raw_text[len("/persona"):].strip()
+
+    try:
+        if args.startswith("delete "):
+            pm.validate_name(args[len("delete "):].strip())
+        elif args and args not in {"list", "reset", "info"} and not args.startswith("create "):
+            pm.validate_name(args)
+    except ValueError as exc:
+        await persona_cmd.finish(MessageSegment.reply(event.message_id) + str(exc))
+        return
 
     # ─── /persona 或 /persona list ───
     if not args or args == "list":
