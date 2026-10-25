@@ -185,6 +185,11 @@ class TestResolveSafePathGroupRelative:
         _, err = _resolve_safe_path("C:/Windows/System32/cmd.exe", GROUP_CTX)
         assert err is not None
 
+    @pytest.mark.parametrize("path", ["C:relative.txt", "C:\\Windows\\file", "\\\\host\\share\\file", "/etc/passwd", "folder/../MEMORY.md", "folder\\..\\MEMORY.md"])
+    def test_foreign_platform_and_parent_paths_are_rejected(self, path):
+        _, err = _resolve_safe_path(path, GROUP_CTX)
+        assert err is not None
+
 
 # ──────────────────── read_file_tool ────────────────────
 

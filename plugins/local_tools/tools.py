@@ -12,7 +12,7 @@
 
 from datetime import datetime
 from botcore.storage import atomic_write_text
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from nonebot.log import logger
 
@@ -87,6 +87,10 @@ def _resolve_safe_path(filepath: str, context: dict | None = None) -> tuple[Path
     if err:
         return Path(), err
 
+    # Linux 的 Path 不把 C:/... 或反斜杠视为 Windows 路径；禁止将其退化为群内相对路径。
+    if chat_type == "group" and ".." in filepath.replace("\\", "/").split("/"):
+        return Path(), "[错误] 路径不在允许范围内，不能包含父目录跳转"
+
     # 候选路径：先按原样解析；群聊再尝试按"相对本群目录"解析。
     # 以 data/ 开头的路径视为项目根相对路径，保持严格校验不 fallback
     # （防止 "data/groups/<其他群>/..." 被嵌套解析进本群目录）。
@@ -96,6 +100,8 @@ def _resolve_safe_path(filepath: str, context: dict | None = None) -> tuple[Path
         and filepath
         and not filepath.startswith("data/")
         and not Path(filepath).is_absolute()
+        and not PureWindowsPath(filepath).drive
+        and not filepath.startswith(("/", "\\"))
     ):
         candidates.append(str(roots[0] / filepath))
 
