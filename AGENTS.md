@@ -29,9 +29,9 @@
 ## 关键架构决策
 
 ### 插件加载方式
-`pyproject.toml` 配置 `plugin_dirs = ["plugins"]`，NoneBot2 会递归扫描 `plugins/` 下所有包。每个子包的 `__init__.py` 负责导入自己的子模块（handler、commands 等）。
+`pyproject.toml` 的 `plugin_dirs = ["plugins"]` 发现插件。群聊、私聊、人格、技能、本地工具、提醒和 Dashboard 的注册分别在 `plugins/*_plugin.py`；对应服务包的 `__init__.py` 不注册命令或启动钩子，导入 manager 不再顺带加载 handler。
 
-注意插件加载顺序不固定，`from .skill.manager import ...` 也会执行 `skill/__init__.py` 并间接导入群 handler。`proactive.py` 的工具链依赖必须在 `run_heartbeat()` 内延迟导入，不能在计时器 API 定义前加载，否则会形成 `proactive → skill.commands → group.handler → proactive` 循环，且失败后重试可能重复注册启动钩子。`tests/test_plugin_startup.py` 在临时源码副本、独立进程中使用真实 NoneBot 验证六种加载顺序及启动钩子唯一性；不能仅靠隔离 mock 单元测试验证此类问题。
+`tests/test_plugin_startup.py` 使用真实 NoneBot 在独立进程验证十种加载顺序、启动钩子唯一性，以及服务导入无需初始化 NoneBot 且不加载 handler。新增服务不能放回父包初始化注册链。
 
 ### LLM 调用
 `plugins/llm.py` 是唯一的 LLM 配置中心，导出 `API_KEY, BASE_URL, MODEL`。所有调用方 `from ..llm import ...`，**不要**在其他模块硬编码 API key 或 base URL。
@@ -529,3 +529,5 @@ python -c "import ast; ast.parse(open('plugins/chat/proactive.py', encoding='utf
 - 工具结果经 `botcore.tools.ToolResult` 携带状态，旧文本结果只在 `tool_result()` 中适配；日志与历史共用状态，不能各自解析错误前缀。所有聊天补全请求（包括压缩、提醒、蒸馏和 Sub-Agent）走 `plugins.llm.call_llm` 的 fallback；蒸馏可用 `model_override` 选择主 provider 的小模型。
 - `botcore.sessions` 管理会话锁与版本：主对话、心跳、提醒/定时任务和插话共用 `(chat_type, target_id, persona)`；reset 或切换旧人格会使旧版本失效，旧模型结果、排队请求及后续工具/发送不得继续。模型等待期间不强杀后台调度器，`SessionInvalidated` 由入口静默处理；调度等待时间不持有会话锁。
 - `botcore.storage` 提供原子文本/JSON 写入和按路径串行的字段更新；群/Admin 配置、提醒、记忆合并、人格、凭证、统计和 Dashboard 文件修改复用它。配置与提醒损坏时拒绝覆盖原文件；统计读取失败时保留文件并停写。心跳/压缩只更新自己的水位线字段，不能用 LLM 等待前的整个配置快照覆盖新设置。
+
+- 生命周期入口已移到 `group_plugin.py`、`chat_plugin.py`、`persona_plugin.py`、`skill_plugin.py`、`local_tools_plugin.py`、`reminder_plugin.py` 和 `dashboard_plugin.py`。数据目录、命令和生产启动命令沿用现有约定。

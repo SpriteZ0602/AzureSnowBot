@@ -1,10 +1,1 @@
-"""
-本地工具插件包
-────────────
-注册和管理本地 Python 工具，与 MCP/Skill 工具统一注入 agentic loop。
-"""
-
-from . import manager as manager  # noqa: F401
-from . import tools as tools      # noqa: F401  触发工具注册
-from . import tarot as tarot      # noqa: F401  触发工具注册
-from . import stickers as stickers  # noqa: F401
+"""local_tools 服务包；NoneBot 注册入口在 plugins/local_tools_plugin.py。"""

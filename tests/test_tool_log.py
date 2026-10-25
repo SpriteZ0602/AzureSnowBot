@@ -203,13 +203,13 @@ async def test_lifecycle_cleans_idle_logs_and_stops_background_task(tool_log, mo
     module("plugins.mcp", manager=mcp)
     skill = module("plugins.skill.manager", scan_skills=MagicMock())
     module("plugins.skill", manager=skill)
+    module("plugins.group", __path__=[str(ROOT / "plugins/group")])
     for name in ["handler", "commands", "chatlog", "repeater", "chatter"]:
         module(f"plugins.group.{name}")
     monkeypatch.setitem(sys.modules, "plugins.tool_log", tool_log)
-    spec = importlib.util.spec_from_file_location("plugins.group", ROOT / "plugins/group/__init__.py",
-                                                submodule_search_locations=[str(ROOT / "plugins/group")])
+    spec = importlib.util.spec_from_file_location("plugins.group_plugin", ROOT / "plugins/group_plugin.py")
     group = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, "plugins.group", group)
+    monkeypatch.setitem(sys.modules, "plugins.group_plugin", group)
     spec.loader.exec_module(group)
     monkeypatch.setattr(group, "_start_group_heartbeats", lambda: None)
     path = tool_log.LOG_DIR / "groups/123.jsonl"

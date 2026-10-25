@@ -44,14 +44,14 @@ assert private_handler.reset_idle_timer is proactive.reset_idle_timer
 
 # 导入失败后重新导入曾导致同名启动回调重复注册，不能只检查最终模块能导入。
 hooks = Counter((fn.__module__, fn.__qualname__) for fn in driver._lifespan._startup_funcs)
-for key in (("plugins.group", "_startup"), ("plugins.chat", "_start_heartbeat"),
-            ("plugins.dashboard", "_mount_dashboard")):
+for key in (("plugins.group_plugin", "_startup"), ("plugins.chat_plugin", "_start_heartbeat"),
+            ("plugins.dashboard_plugin", "_mount_dashboard")):
     assert hooks[key] == 1, (key, hooks[key])
 print("startup verified:", first)
 '''
 
 
-@pytest.mark.parametrize("first", ["proactive", "skill", "group", "chat", "persona", "sticker_commands"])
+@pytest.mark.parametrize("first", ["proactive", "skill", "group", "chat", "persona", "sticker_commands", "group_plugin", "chat_plugin", "local_tools_plugin", "dashboard_plugin"])
 def test_real_plugin_loading_is_order_independent(first, tmp_path):
     # NoneBot 要求插件位于 cwd 下；复制源码以隔离模块 __file__ 派生的数据路径。
     shutil.copytree(ROOT / "plugins", tmp_path / "plugins", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -70,3 +70,24 @@ def test_real_plugin_loading_is_order_independent(first, tmp_path):
                             env=env, capture_output=True, text=True, encoding="utf-8", timeout=45)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "startup verified: " + first in result.stdout
+
+
+def test_service_imports_do_not_register_plugins_or_require_driver(tmp_path):
+    shutil.copytree(ROOT / "plugins", tmp_path / "plugins", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(ROOT / "botcore", tmp_path / "botcore", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    code = '''
+import sys
+import plugins.persona.manager
+import plugins.skill.manager
+import plugins.local_tools.manager
+import plugins.reminder.scheduler
+assert "plugins.group.handler" not in sys.modules
+assert "plugins.skill.commands" not in sys.modules
+assert "plugins.persona.commands" not in sys.modules
+assert "plugins.chat.handler" not in sys.modules
+'''
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(tmp_path)
+    result = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, env=env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
