@@ -7,7 +7,7 @@
 
 ## 项目概述
 
-基于 **NapCat + NoneBot2** 的 QQ 智能 Agent Bot。Python 3.14，Conda 环境 `QQBot`（`D:\Anaconda\envs\QQBot`）。
+基于 **NapCat + NoneBot2** 的 QQ 智能 Agent Bot。Python >= 3.10，开发机 Conda 环境 `QQBot`。
 
 以上 Conda 环境仅用于开发机。服务器项目位于 `/opt/AzureSnowBot`，使用项目内的 `venv` 虚拟环境；依赖通过 `venv/bin/python -m pip install ...` 安装，启动命令为 `nohup venv/bin/python main.py > bot.log 2>&1 &`。更新后应先停止旧进程再启动，不需要激活 Conda 或依赖系统的 `python` 命令。
 
@@ -133,7 +133,7 @@ DASHBOARD_SECRET_KEY=           # JWT 密钥，留空则每次重启随机生成
 群聊和 Admin 私聊都有完整 Agentic Loop：
 1. 发 LLM 请求（带 tools）
 2. 如果 LLM 返回 `tool_calls` → 执行工具 → 把结果塞回 messages → 回到 1
-3. 最多 10 轮（`MAX_TOOL_ROUNDS`）
+3. 最多 20 轮（`MAX_TOOL_ROUNDS`），然后不带工具生成最终总结
 4. 工具优先级：Skill 工具 → 本地工具 → MCP 工具
 
 ### 群聊工具执行记录
@@ -533,3 +533,5 @@ python -c "import ast; ast.parse(open('plugins/chat/proactive.py', encoding='utf
 - 生命周期入口已移到 `group_plugin.py`、`chat_plugin.py`、`persona_plugin.py`、`skill_plugin.py`、`local_tools_plugin.py`、`reminder_plugin.py` 和 `dashboard_plugin.py`。数据目录、命令和生产启动命令沿用现有约定。
 
 - `sticker_transport.image_source` 对 4 MiB 以内图片在线程中读取/编码；更大文件以 512 KiB 块走 NapCat `upload_file_stream`，核验分块回执、字节数和 SHA256 后，使用 NapCat 返回的路径发送。该阈值只选择传输方式，不限制收藏大小。旧 NapCat 不支持上传扩展时明确失败，图库不删除，也不回退整张巨量 Base64。流式临时文件 5 分钟回收，列表按需上传并短期复用远端路径。Dashboard 图片使用鉴权 FileResponse 流。
+
+- Python 依赖以 `pyproject.toml` 为准，`requirements.txt` 和 Conda 都引用本项目；服务器使用 `venv/bin/python -m pip install -r requirements.txt`。测试额外依赖为 `.[test]`。前端声明 Node >=22.14、npm >=10，并开启 engine-strict；不启用 Dashboard 时无需前端安装/构建。CI 覆盖 Python 3.10/3.11/3.14 测试及 Node 22 前端构建。

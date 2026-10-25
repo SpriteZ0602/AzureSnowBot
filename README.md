@@ -342,18 +342,21 @@ AzureSnowBot/
 
 - Python >= 3.10
 - NapCat Shell 已安装并登录 QQ
-- Node.js（如需 MCP 工具）
+- Dashboard 构建使用 Node.js >= 22.14、npm >= 10；仅运行 Bot 不需要构建前端。MCP 工具按其自身要求安装 Node.js。
 
 ### 安装依赖
 
 ```bash
-pip install "nonebot2[fastapi]" nonebot-adapter-onebot httpx mcp PyJWT bcrypt "Pillow>=12.0,<14"
+python3 -m venv venv
+venv/bin/python -m pip install -r requirements.txt
 ```
 
 Web Dashboard 前端（可选，需要 Node.js）：
 
 ```bash
-cd web && npm install && npm run build
+cd web
+npm ci
+npm run build
 ```
 
 ### 配置
@@ -493,14 +496,10 @@ Dashboard 的“表情包”页面支持按群、标签筛选、GIF 预览、修
 
 ```bash
 git pull
-venv/bin/python -m pip install "Pillow>=12.0,<14"
-cd web
-npm ci
-npm run build
-cd ..
+venv/bin/python -m pip install -r requirements.txt
 ```
 
-随后停止原有 Bot 进程，再从项目目录启动：
+Dashboard 如需更新，在 `web/` 用 Node.js >= 22.14 执行 `npm ci`、`npm run build`；不开 Dashboard 可跳过。随后停止原有 Bot 进程，再从项目目录启动：
 
 ```bash
 nohup venv/bin/python main.py > bot.log 2>&1 &
@@ -555,3 +554,14 @@ description: 这个技能做什么。当用户问到 XX 时使用。
 - Markdown 正文只在 LLM 触发时加载，节省 token
 - references/ 中的文件按需加载，适合放详细参考料
 - SKILL.md 正文建议不超过 500 行，超出部分拆到 references/
+
+
+### 维护与验证
+
+Python 运行依赖统一在 `pyproject.toml`，服务器用 `venv/bin/python -m pip install -r requirements.txt` 安装，开发环境用 `python -m pip install -e '.[test]'`。Conda 的 `environment.yml` 也引用同一份依赖。测试命令为 `python -m pytest tests/ -q`；CI 在 Python 3.10、3.11、3.14 上运行，并单独构建 Dashboard。前端在安装阶段检查 Node/npm 版本，避免旧 Node 到编译时才报语法错误。
+
+插件注册集中在 `plugins/*_plugin.py`，服务包导入不注册命令；共用工具循环、会话生命周期、文件持久化和路径校验位于 `botcore/`。现有数据路径无需迁移。
+
+一次性提醒仅在确认送达后删除。明确失败会有限重试并保留记录；超时、部分送达或发送中进程中断会保留为待核对，避免重复提醒。可让 Bot 列出提醒查看状态，Dashboard 的提醒页也显示发送状态。
+
+超过 4 MiB 的表情使用 NapCat 的 `upload_file_stream` 分块上传，完成字节数和 SHA256 校验后发送远端路径；普通发送和表情列表均使用同一传输。该阈值不限制收藏大小。需要 NapCat 支持此扩展；不支持时发送明确失败，收藏仍保留。上传临时文件在 NapCat 侧保留 5 分钟。Dashboard 图片仍需 JWT 鉴权，响应改为文件流。

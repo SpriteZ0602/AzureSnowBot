@@ -8,13 +8,4 @@ dependencies:
   - python=3.14
   - pip
   - pip:
-      - "nonebot2[fastapi]==2.5.0"
-      - nonebot-adapter-onebot==2.4.6
-      - httpx==0.28.1
-      - "Pillow>=12.0,<14"
-      - mcp==2.0.0
-      - PyJWT==2.13.0
-      - bcrypt==5.0.0
-      - python-dotenv==1.2.2
-      - pytest==9.1.1
-      - pytest-asyncio==1.4.0
+      - -e .[test]

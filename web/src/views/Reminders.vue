@@ -19,6 +19,13 @@
         </el-table-column>
         <el-table-column prop="creator_name" label="创建者" width="100" />
         <el-table-column prop="message" label="内容" show-overflow-tooltip />
+        <el-table-column label="发送状态" width="150">
+          <template #default="{ row }">
+            <el-tag :type="row.delivery_state === 'failed' || row.delivery_state === 'unknown' ? 'warning' : 'info'" size="small">
+              {{ deliveryState(row.delivery_state) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="触发时间" width="180">
           <template #default="{ row }">
             {{ row.recurring === 'daily' ? `每天 ${row.daily_time}` : formatTime(row.fire_at) }}
@@ -42,6 +49,14 @@ import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const reminders = ref<any[]>([])
+
+function deliveryState(state?: string): string {
+  const labels: Record<string, string> = {
+    pending: '待触发', sending: '待核对', sent: '已送达',
+    failed: '发送失败，已保留', unknown: '状态未知，待核对',
+  }
+  return labels[state || 'pending'] || '待核对'
+}
 
 async function loadReminders() {
   const { data } = await api.get('/reminders')
