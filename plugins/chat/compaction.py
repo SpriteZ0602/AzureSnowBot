@@ -139,30 +139,13 @@ async def _call_llm(system_prompt: str, user_content: str) -> str | None:
         logger.warning("Compaction: 未配置 API Key，跳过")
         return None
 
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": MODEL,
-        "messages": [
+    try:
+        from ..llm import call_llm
+        data = await call_llm([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
-        ],
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=COMPACTION_TIMEOUT) as client:
-            resp = await client.post(
-                f"{BASE_URL}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            from ..token_stats import record_usage
-            record_usage("compaction", data.get("usage"))
-            return (data["choices"][0]["message"].get("content") or "").strip()
+        ], source="compaction", timeout=COMPACTION_TIMEOUT)
+        return (data["choices"][0]["message"].get("content") or "").strip()
     except Exception as e:
         logger.error(f"Compaction LLM 调用失败: {e}")
         return None

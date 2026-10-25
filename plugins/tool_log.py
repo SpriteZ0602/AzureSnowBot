@@ -10,6 +10,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+from botcore.tools import tool_result
 
 LOG_DIR = Path("data/tool_calls")
 LEGACY_LOG_FILE = Path("data/tool_calls.jsonl")
@@ -121,7 +122,7 @@ def log_tool_call(
         "tool": tool_name,
         "args": arguments,
         "result_len": len(result) if result else 0,
-        "ok": not result.startswith("[错误]") if result else True,
+        "ok": tool_result(result or "").ok,
         "user_id": user_id,
         "group_id": group_id,
     }

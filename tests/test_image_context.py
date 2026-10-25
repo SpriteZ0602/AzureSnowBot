@@ -185,7 +185,10 @@ def group_handler(tmp_path, monkeypatch):
     module("plugins.proactive", reset_idle_timer=lambda *a: None)
     module("plugins.mcp.manager", get_openai_tools=lambda: [], call_tool=AsyncMock(), MAX_TOOL_ROUNDS=2)
     module("plugins.skill.manager", build_catalog_prompt=lambda **kw: "", get_openai_tools=lambda **kw: [], handle_tool_call=lambda *a, **kw: None)
-    module("plugins.local_tools.manager", get_openai_tools=lambda **kw: [], handle_tool_call=AsyncMock(return_value="正位 太阳"), _registry={})
+    module("plugins.local_tools.manager", get_openai_tools=lambda **kw: [
+        {"type": "function", "function": {"name": f"local__{name}"}} for name in
+        ["tarot", "save_quoted_sticker", "delete_quoted_sticker", "save_recent_stickers", "update_quoted_sticker_tags"]
+    ], handle_tool_call=AsyncMock(return_value="正位 太阳"), _registry={})
     module("plugins.tool_log", log_tool_call=lambda *a, **kw: None)
     module("plugins.chat.compaction", should_compact=lambda h: False, compact_history=AsyncMock())
     module("plugins.group.chatter", note_bot_reply=lambda gid: None)

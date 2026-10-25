@@ -337,79 +337,27 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
 
     try:
         from .llm import call_llm
-        for round_idx in range(MAX_TOOL_ROUNDS):
-            data = await call_llm(messages, tools=openai_tools or None, source="heartbeat")
-            choice = data["choices"][0]
-            assistant_msg = choice["message"]
+        from botcore.agent import run_agent
+        from .tool_dispatch import execute_tool
 
-            tool_calls = assistant_msg.get("tool_calls")
-            if not tool_calls:
-                # 最终回复。先剥掉内联的思考块，避免把 <think> 标签发给用户
-                # （真正要发的话，标签里的内容本来也不该出现）
-                reply = _strip_thinking(assistant_msg.get("content") or "").strip()
+        async def dispatch(name, arguments):
+            return await execute_tool(name, arguments, context=tool_ctx, source="heartbeat")
 
-                if _is_heartbeat_ok(reply):
-                    logger.debug(f"心跳 [{chat_type}:{target_id}]: LLM 回复 HEARTBEAT_OK，静默")
-                    return
-
-                # LLM 有话要说：写入历史并发送
-                if chat_type == "private":
-                    bot = get_bot()
-                    result = await send_chunked_raw(bot, "private", int(ADMIN_NUMBER), reply)
-                    record_delivery(result, reply, lambda msg: append_message(ADMIN_NUMBER, msg))
-                else:
-                    from .sticker_reply import prepare
-                    reply, sticker = prepare(target_id, reply)
-                    if not reply and not sticker:
-                        return
-                    bot = get_bot()
+        assistant = await run_agent(messages, request=call_llm, dispatch=dispatch, tools=openai_tools,
+                                    source="heartbeat", max_rounds=MAX_TOOL_ROUNDS)
+        reply = _strip_thinking(assistant.get("content") or "").strip()
+        if not _is_heartbeat_ok(reply):
+            bot = get_bot()
+            if chat_type == "private":
+                result = await send_chunked_raw(bot, "private", int(ADMIN_NUMBER), reply)
+                record_delivery(result, reply, lambda msg: append_message(ADMIN_NUMBER, msg))
+            else:
+                from .sticker_reply import prepare
+                reply, sticker = prepare(target_id, reply)
+                if reply or sticker:
                     options = {"sticker": sticker, "persona": persona} if sticker else {}
                     result = await send_chunked_raw(bot, "group", int(target_id), reply, **options)
                     record_delivery(result, reply, lambda msg: append_message(target_id, msg, persona))
-                logger.info(f"心跳 [{chat_type}:{target_id}]: 发送状态={getattr(result, 'status', 'unknown')} ({len(reply)} 字)")
-                return
-
-            # 处理工具调用（LLM 在心跳中可以读写记忆等）
-            messages.append(assistant_msg)
-            logger.info(
-                f"心跳 [{chat_type}:{target_id}] LLM 工具调用 (round {round_idx + 1}): "
-                f"{[tc['function']['name'] for tc in tool_calls]}"
-            )
-
-            for tc in tool_calls:
-                fn_name = tc["function"]["name"]
-                try:
-                    fn_args = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    fn_args = {}
-
-                # 分发链路：Skill → 本地工具 → MCP
-                skill_result = skill_handle_tool_call(fn_name, fn_args, context=tool_ctx)
-                if skill_result is not None:
-                    tool_result = skill_result
-                else:
-                    local_result = await local_handle_tool_call(
-                        fn_name, fn_args, context=tool_ctx
-                    )
-                    if local_result is not None:
-                        tool_result = local_result
-                    else:
-                        tool_result = await mcp_call_tool(fn_name, fn_args)
-
-                from .tool_log import log_tool_call
-                log_tool_call("heartbeat", fn_name, fn_args, tool_result, context=tool_ctx)
-                from .tool_history import record_tool_execution
-                record_tool_execution(fn_name, fn_args, tool_result, context=tool_ctx, source="heartbeat")
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": tool_result,
-                })
-
-        # 超过最大工具轮次
-        logger.warning(f"心跳 [{chat_type}:{target_id}]: 工具调用轮次达上限")
-
     except Exception as e:
         logger.error(f"心跳 [{chat_type}:{target_id}] LLM 调用失败: {e}")
 

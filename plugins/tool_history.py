@@ -5,11 +5,11 @@ import re
 from collections.abc import Callable
 
 from nonebot.log import logger
+from botcore.tools import tool_result
 
 ARGUMENT_LIMIT = 200
 RESULT_LIMIT = 600
 _SECRET_KEYS = re.compile(r"token|password|secret|api.?key|authorization", re.I)
-_ERROR_PREFIXES = ("[错误]", "[工具调用出错]", "[Sub-Agent 调用失败]", "[Sub-Agent 工具调用轮次达上限]")
 
 
 def shorten(text: str, limit: int) -> str:
@@ -40,7 +40,7 @@ def summarize_web_read(arguments: dict, result: str) -> str:
 
 def make_receipt(name: str, arguments: dict, result: str, *, source: str = "group",
                  formatter: Callable[[dict, str], str] | None = None) -> str:
-    status = "失败" if result.lstrip().startswith(_ERROR_PREFIXES) else "已执行"
+    status = "已执行" if tool_result(result).ok else "失败"
     summary = result
     if formatter is not None and status != "失败":
         try:

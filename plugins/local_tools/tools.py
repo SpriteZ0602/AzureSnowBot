@@ -397,9 +397,7 @@ async def run_sub_agent(
     if not data:
         return "[错误] 请提供要处理的数据（data）"
 
-    import json as _json
-    import httpx
-    from ..llm import API_KEY, BASE_URL, MODEL
+    from ..llm import API_KEY
     from ..local_tools.manager import (
         get_openai_tools as local_openai_tools,
         handle_tool_call as local_handle_tool_call,
@@ -413,27 +411,16 @@ async def run_sub_agent(
     if not API_KEY:
         return "[错误] 未配置 API Key"
 
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
     messages = [
         {"role": "system", "content": task},
         {"role": "user", "content": data},
     ]
-    payload: dict = {
-        "model": MODEL,
-        "messages": messages,
-    }
-
     # 注入工具链（不给 Skill 和 run_sub_agent，sub-agent 靠 task 指令工作）
     chat_type = (_context or {}).get("_chat_type", "private")
     openai_tools = local_openai_tools(chat_type=chat_type) + mcp_openai_tools()
     openai_tools = [t for t in openai_tools if t["function"]["name"] not in {
         "local__run_sub_agent", "local__save_quoted_sticker", "local__delete_quoted_sticker", "local__request_sticker", "local__save_recent_stickers", "local__update_quoted_sticker_tags",
     }]
-    if openai_tools:
-        payload["tools"] = openai_tools
 
     # 工具调用上下文（继承主 Agent 的上下文）
     tool_context = dict(_context) if _context else {}
@@ -443,57 +430,18 @@ async def run_sub_agent(
         tool_context["_persona"] = get_active_persona(str(tool_context.get("_target_id", "")))
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            for _round in range(MAX_TOOL_ROUNDS):
-                resp = await client.post(
-                    f"{BASE_URL}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-                resp.raise_for_status()
-                result = resp.json()
-                from ..token_stats import record_usage
-                record_usage("sub_agent", result.get("usage"))
-                assistant_msg = result["choices"][0]["message"]
+        from ..llm import call_llm
+        from ..tool_dispatch import execute_tool
+        from botcore.agent import run_agent
 
-                tool_calls = assistant_msg.get("tool_calls")
-                if not tool_calls:
-                    reply = (assistant_msg.get("content") or "").strip()
-                    return reply if reply else "[Sub-Agent 未返回内容]"
+        async def dispatch(name, arguments):
+            return await execute_tool(name, arguments, context=tool_context, source="sub_agent")
 
-                # 处理工具调用
-                messages.append(assistant_msg)
-                for tc in tool_calls:
-                    fn_name = tc["function"]["name"]
-                    try:
-                        fn_args = _json.loads(tc["function"]["arguments"])
-                    except _json.JSONDecodeError:
-                        fn_args = {}
-
-                    # 分发链路：本地工具 → MCP（sub-agent 无 Skill）
-                    local_result = await local_handle_tool_call(
-                        fn_name, fn_args, context=tool_context
-                    )
-                    if local_result is not None:
-                        tool_result = local_result
-                    else:
-                        tool_result = await mcp_call_tool(fn_name, fn_args)
-
-                    from ..tool_log import log_tool_call
-                    log_tool_call("sub_agent", fn_name, fn_args, tool_result, context=tool_context)
-                    from ..tool_history import record_tool_execution
-                    record_tool_execution(fn_name, fn_args, tool_result, context=tool_context, source="sub_agent")
-
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": tool_result,
-                    })
-                payload["messages"] = messages
-
-        return "[Sub-Agent 工具调用轮次达上限]"
-    except Exception as e:
-        return f"[Sub-Agent 调用失败] {e}"
+        assistant = await run_agent(messages, request=call_llm, dispatch=dispatch, tools=openai_tools,
+                                    source="sub_agent", max_rounds=MAX_TOOL_ROUNDS)
+        return (assistant.get("content") or "").strip() or "[Sub-Agent 未返回内容]"
+    except Exception as exc:
+        return f"[Sub-Agent 调用失败] {exc}"
 
 
 @register_tool(

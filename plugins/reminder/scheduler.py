@@ -140,25 +140,11 @@ async def _generate_reminder_message(job: ReminderJob) -> str:
             if catalog:
                 messages.append({"role": "system", "content": catalog})
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{cfg['base_url']}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {cfg['api_key']}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": cfg["model"],
-                    "messages": messages,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            from ..token_stats import record_usage
-            record_usage("reminder", data.get("usage"))
-            reply = data["choices"][0]["message"]["content"].strip()
-            if reply:
-                return reply
+        from ..llm import call_llm
+        data = await call_llm(messages, source="reminder", timeout=30)
+        reply = (data["choices"][0]["message"].get("content") or "").strip()
+        if reply:
+            return reply
 
     except Exception as e:
         logger.warning(f"LLM 生成提醒消息失败，使用固定格式: {e}")
@@ -298,63 +284,15 @@ async def _execute_scheduled_task(job: ReminderJob) -> str:
             if catalog:
                 messages.append({"role": "system", "content": catalog})
 
-        for round_idx in range(MAX_TOOL_ROUNDS):
-            data = await call_llm(messages, tools=openai_tools or None, source="task")
-            assistant_msg = data["choices"][0]["message"]
-            tool_calls = assistant_msg.get("tool_calls")
+        from botcore.agent import run_agent
+        from ..tool_dispatch import execute_tool
 
-            if not tool_calls:
-                reply = (assistant_msg.get("content") or "").strip()
-                return reply or fallback
+        async def dispatch(name, arguments):
+            return await execute_tool(name, arguments, context=tool_ctx, source="task")
 
-            messages.append(assistant_msg)
-            logger.info(
-                f"定时任务 [{job.id}] 工具调用 (round {round_idx + 1}): "
-                f"{[tc['function']['name'] for tc in tool_calls]}"
-            )
-
-            for tc in tool_calls:
-                fn_name = tc["function"]["name"]
-                try:
-                    fn_args = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    fn_args = {}
-
-                skill_result = skill_handle_tool_call(fn_name, fn_args, context=tool_ctx)
-                if skill_result is not None:
-                    tool_result = skill_result
-                else:
-                    local_result = await local_handle_tool_call(
-                        fn_name, fn_args, context=tool_ctx,
-                    )
-                    if local_result is not None:
-                        tool_result = local_result
-                    else:
-                        tool_result = await mcp_call_tool(fn_name, fn_args)
-
-                from ..tool_log import log_tool_call
-                log_tool_call(
-                    "task", fn_name, fn_args, tool_result,
-                    user_id=job.user_id,
-                    context=tool_ctx,
-                )
-                from ..tool_history import record_tool_execution
-                record_tool_execution(fn_name, fn_args, tool_result, context=tool_ctx, source="task")
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": tool_result,
-                })
-
-        # 工具轮次用尽：不带工具再调一次，让模型基于已有信息给结果
-        messages.append({
-            "role": "user",
-            "content": "请根据已获取到的信息，直接输出最终结果。",
-        })
-        final_data = await call_llm(messages, source="task")
-        reply = (final_data["choices"][0]["message"].get("content") or "").strip()
-        return reply or fallback
+        assistant = await run_agent(messages, request=call_llm, dispatch=dispatch, tools=openai_tools,
+                                    source="task", max_rounds=MAX_TOOL_ROUNDS)
+        return (assistant.get("content") or "").strip() or fallback
 
     except Exception as e:
         logger.error(f"定时任务执行失败 [{job.id}]「{job.message}」: {e}")

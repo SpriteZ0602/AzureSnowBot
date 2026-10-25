@@ -180,6 +180,7 @@ async def call_llm(
     source: str = "unknown",
     timeout: int = 120,
     response_format: dict | None = None,
+    model_override: str | None = None,
 ) -> dict:
     """
     调用 LLM API，失败时自动 fallback 到备用模型。
@@ -198,7 +199,7 @@ async def call_llm(
 
     # 构建尝试列表：主力 + fallback
     attempts = [
-        (LLM_PROVIDER, API_KEY, BASE_URL, MODEL),
+        (LLM_PROVIDER, API_KEY, BASE_URL, model_override or MODEL),
         *_FALLBACK_CHAIN,
     ]
 

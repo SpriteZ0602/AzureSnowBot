@@ -103,30 +103,13 @@ async def distill_memories(text: str, memories_path: Path) -> int:
 
 async def _call_small_llm(model: str, text: str) -> str | None:
     """调用小模型进行蒸馏"""
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model,
-        "messages": [
+    try:
+        from ..llm import call_llm
+        data = await call_llm([
             {"role": "system", "content": DISTILL_SYSTEM_PROMPT},
             {"role": "user", "content": text},
-        ],
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=DISTILL_TIMEOUT) as client:
-            resp = await client.post(
-                f"{BASE_URL}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            from ..token_stats import record_usage
-            record_usage("distill", data.get("usage"))
-            return (data["choices"][0]["message"].get("content") or "").strip()
+        ], source="distill", timeout=DISTILL_TIMEOUT, model_override=model)
+        return (data["choices"][0]["message"].get("content") or "").strip()
     except Exception as e:
         logger.warning(f"结构化蒸馏 LLM 调用失败: {e}")
         return None

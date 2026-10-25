@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
 from nonebot.log import logger
+from botcore.tools import ToolResult, tool_result
 
 # 工具名称前缀
 TOOL_PREFIX = "local"
@@ -155,10 +156,10 @@ async def handle_tool_call(
         # 支持同步和异步函数
         if inspect.isawaitable(result):
             result = await result
-        return str(result)
+        return tool_result(result)
     except Exception as e:
         logger.error(f"本地工具调用失败 [{full_name}]: {e}")
-        return f"[工具调用出错] {e}"
+        return ToolResult(f"[工具调用出错] {e}", ok=False)
 
 
 # ──────────────────── 摘要 ────────────────────

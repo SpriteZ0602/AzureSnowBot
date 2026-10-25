@@ -182,6 +182,12 @@ def test_write_failure_does_not_break_tool_execution(tool_log, monkeypatch):
     tool_log.log_tool_call("group", "test", {}, "ok", group_id="123")
 
 
+@pytest.mark.parametrize("result", ["[工具调用出错] fixture", "[错误] fixture", "[Sub-Agent 调用失败] fixture"])
+def test_all_error_forms_are_logged_as_failure(tool_log, result):
+    tool_log.log_tool_call("group", "test", {}, result, group_id="123")
+    assert read_entries(tool_log.LOG_DIR / "groups/123.jsonl")[0]["ok"] is False
+
+
 @pytest.mark.asyncio
 async def test_lifecycle_cleans_idle_logs_and_stops_background_task(tool_log, monkeypatch):
     def module(name, **attrs):

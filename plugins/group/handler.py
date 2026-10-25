@@ -224,15 +224,6 @@ async def _handle_group_chat(
     if catalog:
         messages[-1]["content"] += "\n" + catalog
 
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": OPENAI_MODEL,
-        "messages": messages,
-    }
-
     # 合并 MCP 工具 + Skill 工具 + 本地工具（群聊过滤 admin_only 工具）
     openai_tools = get_openai_tools() + skill_openai_tools(chat_type="group") + local_openai_tools(chat_type="group")
     sticker_results: list[str] = []
@@ -269,79 +260,35 @@ async def _handle_group_chat(
             reset_group_proactive_timer(f"group:{group_id}")
         return True
 
+    from botcore.agent import run_agent
+    from ..tool_dispatch import execute_tool
+
+    async def prelude(assistant):
+        text = split_marker(readable_reply(assistant))[0]
+        if text:
+            result = await send_chunked(get_bot(), event, chunk_text(text))
+            record_delivery(result, text, lambda msg: append_message(group_id, msg, active_persona))
+
+    async def on_tool(name, arguments, result):
+        if name in {"local__save_quoted_sticker", "local__delete_quoted_sticker",
+                    "local__save_recent_stickers", "local__update_quoted_sticker_tags"}:
+            sticker_results.append(result)
+
+    async def dispatch(name, arguments):
+        return await execute_tool(name, arguments, context=_tool_context, source="group")
+
     try:
         from ..llm import call_llm
-        # ── Agentic Loop ──
-        for round_idx in range(MAX_TOOL_ROUNDS):
-            try:
-                data = await call_llm(messages, tools=openai_tools or None, source="group", **format_kwargs)
-                assistant_msg = data["choices"][0]["message"]
-            except Exception:
-                if not sticker_results:
-                    raise
-                logger.warning(f"群 {group_id} 表情工具返回后模型请求失败，直接反馈实际执行结果")
-                await send_final(sticker_result_reply())
-                return
-            tool_calls = assistant_msg.get("tool_calls")
-            if not tool_calls:
-                reply = readable_reply(assistant_msg, final=True)
-                await send_final(reply)
-                return
-
-            # 模型可以在同一次回复里既输出文字又调用工具：
-            # 文字（"我来查一下…"）先发给用户，再继续执行工具调用。
-            # 原本这段文字会被直接丢弃（不进历史、不发消息）。
-            prelude = split_marker(readable_reply(assistant_msg))[0]
-            if prelude:
-                bot = get_bot()
-                result = await send_chunked(bot, event, chunk_text(prelude))
-                record_delivery(result, prelude, lambda msg: append_message(group_id, msg, active_persona))
-
-            messages.append(assistant_msg)
-            logger.info(f"LLM 请求工具调用 (round {round_idx + 1}): "
-                        f"{[tc['function']['name'] for tc in tool_calls]}")
-
-            for tc in tool_calls:
-                fn_name = tc["function"]["name"]
-                try:
-                    fn_args = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    fn_args = {}
-
-                # 分发链路：Skill → 本地工具 → MCP
-                skill_result = skill_handle_tool_call(fn_name, fn_args, context=_tool_context)
-                if skill_result is not None:
-                    tool_result = skill_result
-                else:
-                    local_result = await local_handle_tool_call(fn_name, fn_args, context=_tool_context)
-                    if local_result is not None:
-                        tool_result = local_result
-                    else:
-                        tool_result = await call_tool(fn_name, fn_args)
-
-                if fn_name in ("local__save_quoted_sticker", "local__delete_quoted_sticker", "local__save_recent_stickers", "local__update_quoted_sticker_tags"):
-                    sticker_results.append(tool_result)
-
-                from ..tool_log import log_tool_call
-                log_tool_call("group", fn_name, fn_args, tool_result,
-                              user_id=str(event.user_id), group_id=group_id)
-                from ..tool_history import record_tool_execution
-                record_tool_execution(fn_name, fn_args, tool_result, context=_tool_context)
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": tool_result,
-                })
-
-        # 超过最大轮次 — 不带工具再调一次，让 LLM 根据已有信息总结回复
-        messages.append({"role": "user", "content": "你已经无法再调用工具了，请根据上面已经获取到的信息，直接回答用户的问题。"})
         try:
-            final_data = await call_llm(messages, source="group", **format_kwargs)
-            reply = readable_reply(final_data["choices"][0]["message"], final=True)
+            assistant = await run_agent(messages, request=call_llm, dispatch=dispatch,
+                tools=openai_tools, source="group", max_rounds=MAX_TOOL_ROUNDS,
+                on_prelude=prelude, on_tool=on_tool, request_options=format_kwargs)
         except Exception:
-            reply = sticker_result_reply() or "（工具调用轮次已达上限，请重新提问）"
-        await send_final(reply)
+            if not sticker_results:
+                raise
+            await send_final(sticker_result_reply())
+            return
+        await send_final(readable_reply(assistant, final=True))
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await group_chat.finish(f"API 请求失败 ({e.response.status_code})")

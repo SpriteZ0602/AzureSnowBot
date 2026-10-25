@@ -524,3 +524,6 @@ python -c "import ast; ast.parse(open('plugins/chat/proactive.py', encoding='utf
 - 群心跳只读取当前群的提醒；LLM 取消提醒必须传入当前会话范围，跨会话 ID 不授权操作。
 - `botcore.delivery.record_delivery` 统一按真实发送结果写历史；未送达的正文不得伪装成已发出的 assistant 消息，部分送达只保存已确认片段。`SendResult.delivered_text` 提供这个前缀。
 - 一次性提醒保留 `delivery_state`、待发正文及已发消息 ID，发送前原子持久化 `sending`，明确成功才删除；离线或明确失败最多尝试三次，间隔 30 秒，正文复用。`sending/unknown` 重启后保留待核对，部分送达也不整条重发。现有提醒文件自动兼容默认字段。
+
+- `botcore.agent.run_agent` 是群聊、Admin 私聊、心跳、定时任务和 Sub-Agent 共用的循环；`plugins/tool_dispatch.py` 统一执行 Skill → 本地 → MCP 和两类记录，入口不得再复制循环。模型只能执行本轮公开的工具，参数必须是 JSON 对象；Sub-Agent 在执行层拒绝主对话专属工具。
+- 工具结果经 `botcore.tools.ToolResult` 携带状态，旧文本结果只在 `tool_result()` 中适配；日志与历史共用状态，不能各自解析错误前缀。所有聊天补全请求（包括压缩、提醒、蒸馏和 Sub-Agent）走 `plugins.llm.call_llm` 的 fallback；蒸馏可用 `model_override` 选择主 provider 的小模型。

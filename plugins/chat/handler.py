@@ -657,15 +657,6 @@ async def handle_chat(event: PrivateMessageEvent):
         logger.debug(f"[{i}] {m['role']}:\n{m.get('content', '')}")
     logger.debug(f"=== 私聊 Prompt 结束 (共 {len(messages)} 条) ===")
 
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": OPENAI_MODEL,
-        "messages": messages,
-    }
-
     # 工具注入（完整工具链：Skill + 本地 + MCP）
     openai_tools = skill_openai_tools(chat_type="private") + local_openai_tools() + mcp_openai_tools()
 
@@ -679,75 +670,25 @@ async def handle_chat(event: PrivateMessageEvent):
         "_sender_name": sender_name,
     }
 
+    from botcore.agent import run_agent
+    from ..tool_dispatch import execute_tool
+
+    async def prelude(assistant):
+        text = (assistant.get("content") or "").strip()
+        if text:
+            result = await send_chunked(get_bot(), event, chunk_text(text), reply_first=False)
+            record_delivery(result, text, lambda msg: append_message(user_id, msg))
+
+    async def dispatch(name, arguments):
+        return await execute_tool(name, arguments, context=_tool_context, source="chat")
+
     try:
         from ..llm import call_llm
-        for round_idx in range(MAX_TOOL_ROUNDS):
-            data = await call_llm(messages, tools=openai_tools or None, source="chat")
-            choice = data["choices"][0]
-            assistant_msg = choice["message"]
-
-            tool_calls = assistant_msg.get("tool_calls")
-            if not tool_calls:
-                reply = (assistant_msg.get("content") or "").strip()
-                if reply:
-                    bot = get_bot()
-                    chunks = chunk_text(reply)
-                    result = await send_chunked(bot, event, chunks, reply_first=False)
-                    record_delivery(result, reply, lambda msg: append_message(user_id, msg))
-                    reset_idle_timer("private")
-                return
-
-            # 同轮"说话 + 调工具"：文字先发给用户，再执行工具调用
-            # （原实现会丢弃与 tool_calls 同现的 content）
-            prelude = (assistant_msg.get("content") or "").strip()
-            if prelude:
-                bot = get_bot()
-                result = await send_chunked(bot, event, chunk_text(prelude), reply_first=False)
-                record_delivery(result, prelude, lambda msg: append_message(user_id, msg))
-
-            # 处理工具调用
-            messages.append(assistant_msg)
-            logger.info(f"私聊 LLM 请求工具调用 (round {round_idx + 1}): "
-                        f"{[tc['function']['name'] for tc in tool_calls]}")
-
-            for tc in tool_calls:
-                fn_name = tc["function"]["name"]
-                try:
-                    fn_args = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    fn_args = {}
-
-                # 分发链路：Skill → 本地工具 → MCP
-                skill_result = skill_handle_tool_call(fn_name, fn_args, context=_tool_context)
-                if skill_result is not None:
-                    tool_result = skill_result
-                else:
-                    local_result = await local_handle_tool_call(fn_name, fn_args, context=_tool_context)
-                    if local_result is not None:
-                        tool_result = local_result
-                    else:
-                        tool_result = await mcp_call_tool(fn_name, fn_args)
-
-                from ..tool_log import log_tool_call
-                log_tool_call("chat", fn_name, fn_args, tool_result, user_id=user_id)
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": tool_result,
-                })
-
-        # 超过最大轮次 — 不带工具再调一次，让 LLM 根据已有信息总结回复
-        messages.append({"role": "user", "content": "你已经无法再调用工具了，请根据上面已经获取到的信息，直接回答用户的问题。"})
-        try:
-            final_data = await call_llm(messages, source="chat")
-            reply = (final_data["choices"][0]["message"].get("content") or "").strip()
-        except Exception:
-            reply = "（工具调用轮次已达上限，请重新提问）"
+        assistant = await run_agent(messages, request=call_llm, dispatch=dispatch, tools=openai_tools,
+                                    source="chat", max_rounds=MAX_TOOL_ROUNDS, on_prelude=prelude)
+        reply = (assistant.get("content") or "").strip()
         if reply:
-            bot = get_bot()
-            chunks = chunk_text(reply)
-            result = await send_chunked(bot, event, chunks, reply_first=False)
+            result = await send_chunked(get_bot(), event, chunk_text(reply), reply_first=False)
             record_delivery(result, reply, lambda msg: append_message(user_id, msg))
         reset_idle_timer("private")
     except httpx.HTTPStatusError as e:
