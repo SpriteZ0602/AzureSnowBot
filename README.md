@@ -454,6 +454,22 @@ ws://localhost:8082/onebot/v11/ws
 
 ### 启动
 
+Linux 服务器在项目根目录使用：
+
+```bash
+./bot.sh start        # 后台启动
+./bot.sh restart      # 正常停止旧进程，再后台启动
+./bot.sh stop         # 停止
+./bot.sh status       # 查看 PID 和运行状态
+tail -f bot.log       # 查看日志，Ctrl+C 只退出查看
+```
+
+也可以使用 `bash bot.sh restart`，不需要另行 `nohup` 或添加 `&`。脚本从自身位置定位项目，固定使用 `venv/bin/python`，日志追加到 `bot.log`。首次使用会自动识别此前从本项目用 `nohup` 启动的 Bot；重复 start 不会启动第二份。PID 文件为 `.bot.pid`，会同时核对进程启动时间、工作目录、解释器和 main.py，过期 PID 不会用于误杀其他服务。
+
+默认等待旧进程正常退出最多 30 秒。超时会保留原进程并拒绝重复启动；确需强制结束时用 `./bot.sh restart --force`。使用 `./bot.sh start qwen` 时，后续不带参数的 restart 会沿用正在运行的启动参数。status 在未运行时返回退出码 3。启动成功表示已通过两秒进程存活检查，QQ/NapCat 连接状态仍查看日志。
+
+开发机前台运行：
+
 ```bash
 python main.py
 ```
@@ -499,10 +515,10 @@ git pull
 venv/bin/python -m pip install -r requirements.txt
 ```
 
-Dashboard 如需更新，在 `web/` 用 Node.js >= 22.14 执行 `npm ci`、`npm run build`；不开 Dashboard 可跳过。随后停止原有 Bot 进程，再从项目目录启动：
+Dashboard 如需更新，在 `web/` 用 Node.js >= 22.14 执行 `npm ci`、`npm run build`；不开 Dashboard 可跳过。随后重启 Bot：
 
 ```bash
-nohup venv/bin/python main.py > bot.log 2>&1 &
+./bot.sh restart
 ```
 
 无需新增环境变量。聊天数据库会自动补充 QQ 消息 ID 列，保留原有记录；“刚才的图片”功能从更新后记录的新消息中查找，请更新并重启后再发图测试。收藏 ID 和 QQ 发送记录的关联自动保存到现有聊天数据库。

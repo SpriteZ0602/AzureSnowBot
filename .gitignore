@@ -7,6 +7,12 @@ dist/
 .pytest_tmp*/
 .workbuddy/
 .env
+.bot.pid
+.bot.pid.tmp
+.bot.pid.*.tmp
+.bot.lock
+bot.log
+bot.log.*
 .dashboard-env-*.tmp
 vendor/
 reference/

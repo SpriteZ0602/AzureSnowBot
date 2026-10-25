@@ -9,7 +9,7 @@
 
 基于 **NapCat + NoneBot2** 的 QQ 智能 Agent Bot。Python >= 3.10，开发机 Conda 环境 `QQBot`。
 
-以上 Conda 环境仅用于开发机。服务器项目位于 `/opt/AzureSnowBot`，使用项目内的 `venv` 虚拟环境；依赖通过 `venv/bin/python -m pip install ...` 安装，启动命令为 `nohup venv/bin/python main.py > bot.log 2>&1 &`。更新后应先停止旧进程再启动，不需要激活 Conda 或依赖系统的 `python` 命令。
+以上 Conda 环境仅用于开发机。服务器项目位于 `/opt/AzureSnowBot`，使用项目内的 `venv` 虚拟环境；依赖通过 `venv/bin/python -m pip install ...` 安装。使用 `./bot.sh start|stop|restart|status` 管理后台进程（也可 `bash bot.sh ...`），无需额外 nohup、& 或手动找 PID。重启会先正常停止旧进程；不需要激活 Conda 或依赖系统的 `python` 命令。
 
 核心能力：多轮对话、人格系统、MCP/本地工具调用、Skill 渐进式披露、定时提醒、心跳 + 主动发言、对话压缩（Compaction）、记忆管理、Web Dashboard。
 
@@ -535,3 +535,4 @@ python -c "import ast; ast.parse(open('plugins/chat/proactive.py', encoding='utf
 - `sticker_transport.image_source` 对 4 MiB 以内图片在线程中读取/编码；更大文件以 512 KiB 块走 NapCat `upload_file_stream`，核验分块回执、字节数和 SHA256 后，使用 NapCat 返回的路径发送。该阈值只选择传输方式，不限制收藏大小。旧 NapCat 不支持上传扩展时明确失败，图库不删除，也不回退整张巨量 Base64。流式临时文件 5 分钟回收，列表按需上传并短期复用远端路径。Dashboard 图片使用鉴权 FileResponse 流。
 
 - Python 依赖以 `pyproject.toml` 为准，`requirements.txt` 和 Conda 都引用本项目；服务器使用 `venv/bin/python -m pip install -r requirements.txt`。测试额外依赖为 `.[test]`。前端声明 Node >=22.14、npm >=10，并开启 engine-strict；不启用 Dashboard 时无需前端安装/构建。CI 覆盖 Python 3.10/3.11/3.14 测试及 Node 22 前端构建。
+- Linux 运维入口 `bot.sh` → 标准库脚本 `scripts/botctl.py`，使用项目 venv，日志追加到 `bot.log`；`.bot.pid` 保存 PID/启动时间/参数，`.bot.lock` 的 flock 串行管理命令。只识别同工作目录、同解释器且入口确为本项目 main.py 的进程，自动接管旧 nohup 实例；发现多个实例则拒绝自动操作。默认 SIGTERM 等待 30 秒，只有显式 `--force` 才在超时后 SIGKILL；新内核用 pidfd 避免信号发给复用的 PID。启动检查只确认两秒存活，不代表 QQ 已连接。`tests/test_botctl.py` 在 Linux 临时目录管理真实假 Bot 进程，Windows 跳过。
