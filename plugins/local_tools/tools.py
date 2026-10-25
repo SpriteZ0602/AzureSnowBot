@@ -782,13 +782,16 @@ async def set_daily_task(
 )
 async def do_cancel_reminder(
     reminder_id: str = "",
+    _context: dict | None = None,
     **kwargs,
 ) -> str:
     from ..reminder.scheduler import cancel_reminder
 
     if not reminder_id:
         return "[错误] 请提供要取消的提醒ID"
-    ok = cancel_reminder(reminder_id)
+    if not _context or _context.get("_chat_type") not in {"group", "private"} or not _context.get("_target_id"):
+        return "[错误] 缺少当前会话信息，不能取消提醒"
+    ok = cancel_reminder(reminder_id, chat_type=_context["_chat_type"], target_id=str(_context["_target_id"]))
     if ok:
         return f"已取消提醒 [{reminder_id}]"
     return f"[错误] 未找到提醒 [{reminder_id}]，可能已触发或不存在"

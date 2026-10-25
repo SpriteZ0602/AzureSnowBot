@@ -414,6 +414,16 @@ class TestCancelReminder:
         result = cancel_reminder("nonexistent")
         assert result is False
 
+    def test_foreign_session_cannot_cancel(self):
+        from plugins.reminder.scheduler import cancel_reminder
+        job = _make_job(job_id="foreign", target_id="222")
+        _jobs[job.id] = job
+        with patch("plugins.reminder.scheduler._save"):
+            assert not cancel_reminder(job.id, chat_type="group", target_id="111")
+            assert not cancel_reminder(job.id, chat_type="private", target_id="222")
+            assert job.id in _jobs
+            assert cancel_reminder(job.id, chat_type="group", target_id="222")
+
 
 # ──────────────────── get_reminders ────────────────────
 

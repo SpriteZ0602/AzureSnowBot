@@ -53,7 +53,7 @@ def _is_admin_private(chat_type: str, target_id: str) -> bool:
     return chat_type == "private" and target_id == ADMIN_NUMBER
 
 
-def _build_heartbeat_instruction(chat_type: str) -> str:
+def _build_heartbeat_instruction(chat_type: str, target_id: str | None = None) -> str:
     """构建心跳指令。私聊/群聊共用 HEARTBEAT.md，仅"发给谁"措辞不同。"""
     parts: list[str] = []
 
@@ -64,7 +64,7 @@ def _build_heartbeat_instruction(chat_type: str) -> str:
             parts.append(f"# HEARTBEAT.md\n{content}")
 
     # 注入 pending reminders，防止心跳重复提醒已有定时器的事项
-    pending_info = _format_pending_reminders()
+    pending_info = _format_pending_reminders(chat_type, target_id)
     if pending_info:
         parts.append(pending_info)
 
@@ -87,11 +87,14 @@ def _build_heartbeat_instruction(chat_type: str) -> str:
     return "\n\n".join(parts)
 
 
-def _format_pending_reminders() -> str:
+def _format_pending_reminders(chat_type: str = "private", target_id: str | None = None) -> str:
     """获取待触发的提醒列表，格式化为心跳指令的一部分。"""
     try:
-        from .reminder.scheduler import get_all_reminders
-        jobs = get_all_reminders()
+        from .reminder.scheduler import get_reminders
+        target_id = target_id or (ADMIN_NUMBER if chat_type == "private" else "")
+        if not target_id:
+            return ""
+        jobs = get_reminders(chat_type, target_id)
     except Exception:
         return ""
 
@@ -321,7 +324,7 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
 
     messages = [{"role": "system", "content": prompt}] + heartbeat_history
     # 追加心跳指令（用 user 角色确保 LLM 优先遵循，而非被对话历史带偏）
-    messages.append({"role": "user", "content": _build_heartbeat_instruction(chat_type)})
+    messages.append({"role": "user", "content": _build_heartbeat_instruction(chat_type, target_id)})
     if chat_type == "group":
         from .sticker_reply import prompt as sticker_prompt
         catalog = sticker_prompt(target_id)

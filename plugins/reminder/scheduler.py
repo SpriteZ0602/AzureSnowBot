@@ -737,11 +737,16 @@ def _is_current_task(task: asyncio.Task) -> bool:
         return False
 
 
-def cancel_reminder(job_id: str) -> bool:
+def cancel_reminder(job_id: str, *, chat_type: str | None = None, target_id: str | None = None) -> bool:
     """取消一条提醒（一次性或每日）。返回是否成功。"""
-    job = _jobs.pop(job_id, None)
+    job = _jobs.get(job_id)
     if not job:
         return False
+    # 不带范围仅供可信调度器与已认证的 Dashboard 使用。
+    if chat_type is not None or target_id is not None:
+        if job.chat_type != chat_type or job.target_id != target_id:
+            return False
+    _jobs.pop(job_id)
     task = _tasks.pop(job_id, None)
     # 不要 cancel 当前正在执行的任务（任务内部可能调用工具触发替换/取消）
     if task and not task.done() and not _is_current_task(task):

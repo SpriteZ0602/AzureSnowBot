@@ -210,6 +210,20 @@ def _mock_call_llm(reply_content: str):
     _mock_llm.call_llm = AsyncMock(side_effect=_fake_call_llm)
 
 
+def test_heartbeat_reminders_are_scoped(monkeypatch):
+    scheduler = types.ModuleType("plugins.reminder.scheduler")
+    jobs = [types.SimpleNamespace(chat_type=kind, target_id=target, mode="reminder",
+                                 recurring="", fire_at="12:00", creator_name="fixture", message=body)
+            for kind, target, body in [("group", "111", "own"), ("group", "222", "foreign"),
+                                       ("private", proactive.ADMIN_NUMBER, "private-only")]]
+    scheduler.get_reminders = lambda kind, target: [j for j in jobs if (j.chat_type, j.target_id) == (kind, target)]
+    monkeypatch.setitem(sys.modules, "plugins.reminder.scheduler", scheduler)
+    content = proactive._format_pending_reminders("group", "111")
+    assert "own" in content
+    assert "foreign" not in content and "private-only" not in content
+    assert proactive._format_pending_reminders("group") == ""
+
+
 # ══════════════════════════════════════════════════════
 # 计时器（按 key）
 # ══════════════════════════════════════════════════════
