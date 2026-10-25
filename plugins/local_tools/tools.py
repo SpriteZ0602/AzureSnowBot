@@ -819,6 +819,9 @@ async def do_list_reminders(
 
     lines = []
     for j in jobs:
+        if getattr(j, "delivery_state", "pending") in {"sending", "unknown", "failed"}:
+            lines.append(f"  [{j.id}] 发送状态={j.delivery_state}，记录已保留，未知状态不自动重发")
+            continue
         fire_at = datetime.fromisoformat(j.fire_at)
         if j.recurring == "daily":
             kind = "执行任务" if j.mode == "task" else "提醒"

@@ -45,6 +45,8 @@ from plugins.reminder.scheduler import (
 )
 
 import pytest
+from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 
 # ──────────────────── 工具函数 ────────────────────
@@ -423,6 +425,57 @@ class TestCancelReminder:
             assert not cancel_reminder(job.id, chat_type="private", target_id="222")
             assert job.id in _jobs
             assert cancel_reminder(job.id, chat_type="group", target_id="222")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["sent", "failed", "unknown"])
+async def test_oneshot_keeps_unconfirmed_job(monkeypatch, status):
+    from plugins.reminder import scheduler as scheduler
+    _clear_jobs()
+    job = _make_job(fire_at="2000-01-01T00:00:00")
+    _jobs[job.id] = job
+    monkeypatch.setattr(scheduler, "_save", MagicMock())
+    monkeypatch.setattr(scheduler, "get_bot", MagicMock(return_value=object()))
+    monkeypatch.setattr(scheduler, "_job_persona", lambda job: "default")
+    monkeypatch.setattr(scheduler, "_generate_reminder_message", AsyncMock(return_value="fixture"))
+    monkeypatch.setattr(scheduler, "_send_job_result", AsyncMock(return_value=SimpleNamespace(status=status, message_ids=())))
+    monkeypatch.setattr(scheduler, "_reset_proactive_if_admin", MagicMock())
+    monkeypatch.setattr(scheduler.asyncio, "sleep", AsyncMock())
+    await scheduler._fire(job)
+    assert (job.id not in _jobs) == (status == "sent")
+    assert job.delivery_state == status
+    assert scheduler._generate_reminder_message.await_count == 1
+    if status == "unknown":
+        assert scheduler._send_job_result.await_count == 1
+    _clear_jobs()
+
+
+@pytest.mark.asyncio
+async def test_disconnected_bot_keeps_reminder(monkeypatch):
+    from plugins.reminder import scheduler as scheduler
+    _clear_jobs()
+    job = _make_job(fire_at="2000-01-01T00:00:00")
+    _jobs[job.id] = job
+    monkeypatch.setattr(scheduler, "_save", MagicMock())
+    monkeypatch.setattr(scheduler, "get_bot", MagicMock(side_effect=ValueError("offline")))
+    monkeypatch.setattr(scheduler.asyncio, "sleep", AsyncMock())
+    await scheduler._fire(job)
+    assert _jobs[job.id] is job
+    assert job.delivery_state == "failed"
+    _clear_jobs()
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_resend_interrupted_delivery(monkeypatch):
+    from plugins.reminder import scheduler as scheduler
+    job = _make_job(fire_at="2000-01-01T00:00:00")
+    job.delivery_state = "sending"
+    monkeypatch.setattr(scheduler, "_save", MagicMock())
+    send = AsyncMock()
+    monkeypatch.setattr(scheduler, "_send_job_result", send)
+    await scheduler._fire(job)
+    assert job.delivery_state == "unknown"
+    send.assert_not_awaited()
 
 
 # ──────────────────── get_reminders ────────────────────

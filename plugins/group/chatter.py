@@ -9,6 +9,8 @@ Bot 每回一次话，该群插话概率乘 0.5；5 分钟内 Bot 没再说话�
 
 from __future__ import annotations
 
+from botcore.delivery import record_delivery
+
 import random
 import time
 from collections import deque
@@ -233,10 +235,10 @@ async def handle_chatter(bot: Bot, event: GroupMessageEvent):
             reply, sticker = prepare(group_id, reply)
             if reply.upper() in SKIP_REPLIES or (not reply and not sticker):
                 return
-            if reply:
-                append_message(group_id, {"role": "assistant", "content": reply}, persona)
             options = {"sticker": sticker, "persona": persona} if sticker else {}
-            await send_chunked(bot, event, chunk_text(reply), reply_first=False, **options)
+            result = await send_chunked(bot, event, chunk_text(reply), reply_first=False, **options)
+            if not record_delivery(result, reply, lambda msg: append_message(group_id, msg, persona)):
+                return
             note_bot_reply(group_id)
             if get_group_proactive(group_id):
                 reset_idle_timer(f"group:{group_id}")

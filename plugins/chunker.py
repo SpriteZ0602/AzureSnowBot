@@ -160,6 +160,7 @@ class SendResult:
     status: str  # sent / failed / unknown
     message_ids: tuple[int, ...] = ()
     sticker_result: "SendResult | None" = None
+    delivered_text: str = ""
 
 
 def _delivery_error(exc: Exception) -> SendResult:
@@ -216,7 +217,7 @@ async def send_forward(
     except Exception as e:
         return _delivery_error(e)
     ids = _remember_delivery(chat_type, target_id, response, "\n".join(chunks), nickname)
-    return SendResult("sent", ids)
+    return SendResult("sent", ids, delivered_text="\n".join(chunks))
 
 
 # ──────────────────── 分条发送 ────────────────────
@@ -295,7 +296,7 @@ async def send_chunked(
             forwarded = await send_forward(bot, chat_type, target_id, chunks)
             if forwarded.status == "sent":
                 image_result = await _send_sticker_unlocked(bot, target_id, sticker, persona) if group_id and sticker else None
-                return SendResult("sent", forwarded.message_ids, image_result)
+                return SendResult("sent", forwarded.message_ids, image_result, "\n".join(chunks))
             if forwarded.status == "unknown":
                 return forwarded
 
@@ -314,7 +315,7 @@ async def send_chunked(
                     response = await bot.send_private_msg(user_id=event.user_id, message=msg)
             except Exception as exc:
                 failure = _delivery_error(exc)
-                return SendResult(failure.status, tuple(message_ids))
+                return SendResult(failure.status, tuple(message_ids), delivered_text="\n".join(chunks[:i]))
             message_ids.extend(_remember_delivery(chat_type, target_id, response, chunk, _self_nickname or "Bot"))
 
             # 非最后一条，加随机延迟
@@ -322,7 +323,7 @@ async def send_chunked(
                 delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX)
                 await asyncio.sleep(delay)
         image_result = await _send_sticker_unlocked(bot, target_id, sticker, persona) if group_id and sticker else None
-        return SendResult("sent", tuple(message_ids), image_result)
+        return SendResult("sent", tuple(message_ids), image_result, "\n".join(chunks))
 
 
 async def send_chunked_raw(
@@ -359,7 +360,7 @@ async def send_chunked_raw(
             forwarded = await send_forward(bot, chat_type, target_id, chunks)
             if forwarded.status == "sent":
                 image_result = await _send_sticker_unlocked(bot, target_id, sticker, persona) if chat_type == "group" and sticker else None
-                return SendResult("sent", forwarded.message_ids, image_result)
+                return SendResult("sent", forwarded.message_ids, image_result, "\n".join(chunks))
             if forwarded.status == "unknown":
                 return forwarded
 
@@ -374,11 +375,11 @@ async def send_chunked_raw(
                     response = await bot.send_private_msg(user_id=target_id, message=msg)
             except Exception as exc:
                 failure = _delivery_error(exc)
-                return SendResult(failure.status, tuple(message_ids))
+                return SendResult(failure.status, tuple(message_ids), delivered_text="\n".join(chunks[:i]))
             message_ids.extend(_remember_delivery(chat_type, target_id, response, chunk, _self_nickname or "Bot"))
 
             if i < len(chunks) - 1:
                 delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX)
                 await asyncio.sleep(delay)
         image_result = await _send_sticker_unlocked(bot, target_id, sticker, persona) if chat_type == "group" and sticker else None
-        return SendResult("sent", tuple(message_ids), image_result)
+        return SendResult("sent", tuple(message_ids), image_result, "\n".join(chunks))

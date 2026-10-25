@@ -25,6 +25,8 @@ async def list_reminders(_user: str = Depends(get_current_user)):
             "recurring": j.recurring,
             "daily_time": j.daily_time,
             "mode": j.mode,
+            "delivery_state": j.delivery_state,
+            "delivery_message_ids": j.delivery_message_ids,
             "group_id": j.group_id,
         }
         for j in jobs

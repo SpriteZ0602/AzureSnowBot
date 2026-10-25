@@ -12,6 +12,8 @@
 """
 
 import json
+from botcore.delivery import record_delivery
+from botcore.storage import atomic_write_json
 import asyncio
 import uuid
 from datetime import datetime, timedelta
@@ -65,6 +67,9 @@ class ReminderJob:
     daily_time: str = ""   # HH:MM 格式，仅 recurring="daily" 时有效
     mode: str = "reminder" # "reminder" = 提醒用户去做；"task" = Bot 自己执行并输出结果
     group_id: str = ""     # 任务涉及的群号（私聊创建群任务时使用）
+    delivery_state: str = "pending"
+    delivery_text: str = ""
+    delivery_message_ids: list[int] = field(default_factory=list)
 
 
 # ──────────────────── 运行时状态 ────────────────────
@@ -78,10 +83,7 @@ _lock = asyncio.Lock()  # 保护 _jobs 和 _save() 的并发访问
 def _save() -> None:
     """保存所有提醒到磁盘"""
     data = {jid: asdict(job) for jid, job in _jobs.items()}
-    REMINDERS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_json(REMINDERS_FILE, data)
 
 
 def _load() -> dict[str, ReminderJob]:
@@ -404,7 +406,7 @@ def _job_persona(job: ReminderJob) -> str | None:
     return None
 
 
-async def _send_job_result(bot, job: ReminderJob, text: str, persona: str | None) -> None:
+async def _send_job_result(bot, job: ReminderJob, text: str, persona: str | None):
     options = {}
     if job.chat_type == "group":
         from ..sticker_reply import prepare
@@ -412,10 +414,11 @@ async def _send_job_result(bot, job: ReminderJob, text: str, persona: str | None
         if sticker:
             options = {"sticker": sticker, "persona": persona}
         if not text and not sticker:
-            return
-    await send_chunked_raw(bot, job.chat_type, int(job.target_id), text, **options)
-    if text:
-        _append_to_history(job, text, persona)
+            from ..chunker import SendResult
+            return SendResult("sent")
+    result = await send_chunked_raw(bot, job.chat_type, int(job.target_id), text, **options)
+    record_delivery(result, text, lambda msg: _append_to_history(job, msg["content"], persona))
+    return result
 
 async def _fire(job: ReminderJob) -> None:
     """等待到期后发送提醒消息（一次性提醒）"""
@@ -425,33 +428,59 @@ async def _fire(job: ReminderJob) -> None:
     if delay > 0:
         await asyncio.sleep(delay)
 
-    # 从运行时状态中移除
-    async with _lock:
-        _jobs.pop(job.id, None)
-        _tasks.pop(job.id, None)
+    # sending 意味着上次进程可能已发出消息，重启后只能保留为未知，不能重发。
+    if job.delivery_state in {"sending", "unknown"}:
+        job.delivery_state = "unknown"
         _save()
-
-    try:
-        bot = get_bot()
-        persona = _job_persona(job)
-
-        # 调用 LLM 生成提醒消息
-        text = await _generate_reminder_message(job)
-
-        # 补发标记
-        actual_delay = (datetime.now() - fire_at).total_seconds()
-        if actual_delay > 60:
-            text = f"（延迟提醒）{text}"
-
-        # 分条发送
-        await _send_job_result(bot, job, text, persona)
-
-        # Admin 私聊提醒触发后重置主动发言计时器，防止时间重叠
-        _reset_proactive_if_admin(job)
-
-        logger.info(f"提醒已触发: [{job.id}] {job.message}")
-    except Exception as e:
-        logger.error(f"提醒发送失败 [{job.id}]: {e}")
+        return
+    for attempt in range(3):
+        if _jobs.get(job.id) is not job:
+            return
+        try:
+            bot = get_bot()
+            persona = _job_persona(job)
+            if not job.delivery_text:
+                job.delivery_text = await _generate_reminder_message(job)
+                if (datetime.now() - fire_at).total_seconds() > 60:
+                    job.delivery_text = f"（延迟提醒）{job.delivery_text}"
+            if _jobs.get(job.id) is not job:
+                return
+            job.delivery_state = "sending"
+            _save()  # 必须在发送之前持久化，崩溃后不得盲目重发。
+            result = await _send_job_result(bot, job, job.delivery_text, persona)
+            state = getattr(result, "status", "unknown")
+            ids = getattr(result, "message_ids", ())
+            job.delivery_message_ids = list(ids) if isinstance(ids, (tuple, list)) else []
+            job.delivery_state = state if state in {"sent", "failed"} else "unknown"
+            if job.delivery_state == "failed" and (job.delivery_message_ids or getattr(result, "delivered_text", "")):
+                job.delivery_state = "unknown"  # 已送达部分片段，禁止整条重发。
+            if _jobs.get(job.id) is not job:
+                return
+            if job.delivery_state == "sent":
+                _jobs.pop(job.id, None)
+                _tasks.pop(job.id, None)
+                _save()
+                _reset_proactive_if_admin(job)
+                logger.info(f"提醒已送达: [{job.id}]")
+                return
+            _save()
+            if job.delivery_state == "unknown":
+                logger.warning(f"提醒发送状态未知，保留任务待核对，不自动重发: [{job.id}]")
+                return
+        except Exception as exc:
+            # 已进入 sending 后的异常无法确认 QQ 是否收到。
+            if job.delivery_state == "sending":
+                job.delivery_state = "unknown"
+            else:
+                job.delivery_state = "failed"
+            if _jobs.get(job.id) is job:
+                _save()
+            logger.warning(f"提醒尚未确认送达 [{job.id}]: {type(exc).__name__}")
+            if job.delivery_state == "unknown":
+                return
+        if attempt < 2:
+            await asyncio.sleep(30)
+    logger.error(f"提醒重试后仍失败，已保留记录 [{job.id}]")
 
 
 async def _fire_daily(job: ReminderJob) -> None:
@@ -482,13 +511,17 @@ async def _fire_daily(job: ReminderJob) -> None:
                 text = await _generate_reminder_message(job)
 
             # 分条发送
-            await _send_job_result(bot, job, text, persona)
+            result = await _send_job_result(bot, job, text, persona)
+            job.delivery_state = getattr(result, "status", "unknown")
+            if job.delivery_state not in {"sent", "failed"}:
+                job.delivery_state = "unknown"
+            _save()
 
             # Admin 私聊提醒触发后重置主动发言计时器，防止时间重叠
             _reset_proactive_if_admin(job)
 
             kind = "任务" if job.mode == "task" else "提醒"
-            logger.info(f"每日{kind}已触发: [{job.id}] {job.daily_time} | {job.message}")
+            logger.info(f"每日{kind}发送状态={job.delivery_state}: [{job.id}] {job.daily_time}")
         except Exception as e:
             logger.error(f"每日提醒发送失败 [{job.id}]: {e}")
 

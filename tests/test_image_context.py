@@ -157,7 +157,7 @@ def group_handler(tmp_path, monkeypatch):
     """加载真实 handler，仅替换外部服务和 NoneBot 生命周期。"""
     bot = types.SimpleNamespace(get_msg=AsyncMock())
     matcher = types.SimpleNamespace(handle=lambda: lambda fn: fn, finish=AsyncMock())
-    sent = AsyncMock()
+    sent = AsyncMock(return_value=types.SimpleNamespace(status="sent", message_ids=(), delivered_text=""))
     llm = AsyncMock()
     def module(name, **attributes):
         value = types.ModuleType(name)
@@ -184,7 +184,7 @@ def group_handler(tmp_path, monkeypatch):
     module("plugins.llm", API_KEY="test-key", BASE_URL="https://test.invalid", MODEL="deepseek-flash", SUPPORTS_VISION=True, call_llm=llm)
     module("plugins.proactive", reset_idle_timer=lambda *a: None)
     module("plugins.mcp.manager", get_openai_tools=lambda: [], call_tool=AsyncMock(), MAX_TOOL_ROUNDS=2)
-    module("plugins.skill.manager", build_catalog_prompt=lambda **kw: "", get_openai_tools=lambda: [], handle_tool_call=lambda *a: None)
+    module("plugins.skill.manager", build_catalog_prompt=lambda **kw: "", get_openai_tools=lambda **kw: [], handle_tool_call=lambda *a, **kw: None)
     module("plugins.local_tools.manager", get_openai_tools=lambda **kw: [], handle_tool_call=AsyncMock(return_value="正位 太阳"), _registry={})
     module("plugins.tool_log", log_tool_call=lambda *a, **kw: None)
     module("plugins.chat.compaction", should_compact=lambda h: False, compact_history=AsyncMock())
@@ -203,6 +203,17 @@ def group_handler(tmp_path, monkeypatch):
                                  reply=types.SimpleNamespace(message=raw, sender={"nickname": "Alice"}),
                                  sender=types.SimpleNamespace(nickname="Bob"))
     return handler, event, llm, sent, manager, path
+
+
+async def test_failed_delivery_does_not_claim_generated_answer(group_handler):
+    handler, event, llm, sent, manager, path = group_handler
+    event.reply_id = None
+    llm.return_value = {"choices": [{"message": {"content": "UNDELIVERED_REPLY"}}]}
+    sent.return_value = types.SimpleNamespace(status="failed", message_ids=(), delivered_text="")
+    await handler._handle_group_chat(event, "123", "cat", "hello")
+    history = load_jsonl_history(path("123", "cat"))
+    assert "UNDELIVERED_REPLY" not in str(history)
+    assert "发送失败" in str(history)
 
 
 async def test_real_handler_same_response_then_followup_without_image(group_handler):

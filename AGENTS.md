@@ -522,3 +522,5 @@ python -c "import ast; ast.parse(open('plugins/chat/proactive.py', encoding='utf
 - `botcore/` 不注册 NoneBot 插件。`botcore.paths` 是人格及 Dashboard 文件入口共用的名称、数字群号和符号链接目录边界校验；不能把原始人格名直接拼进路径。
 - Admin 技能必须同时在目录、工具 Schema、运行时摘要、群内 `/skill` 及执行入口过滤；Skill 分发必须传入可信 `context`。本地 `admin_only` 工具在执行时再次校验私聊场景，不能仅靠隐藏工具定义。
 - 群心跳只读取当前群的提醒；LLM 取消提醒必须传入当前会话范围，跨会话 ID 不授权操作。
+- `botcore.delivery.record_delivery` 统一按真实发送结果写历史；未送达的正文不得伪装成已发出的 assistant 消息，部分送达只保存已确认片段。`SendResult.delivered_text` 提供这个前缀。
+- 一次性提醒保留 `delivery_state`、待发正文及已发消息 ID，发送前原子持久化 `sending`，明确成功才删除；离线或明确失败最多尝试三次，间隔 30 秒，正文复用。`sending/unknown` 重启后保留待核对，部分送达也不整条重发。现有提醒文件自动兼容默认字段。

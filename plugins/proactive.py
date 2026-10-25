@@ -20,6 +20,7 @@ key 格式:
 
 import asyncio
 import json
+from botcore.delivery import record_delivery
 import re
 from pathlib import Path
 
@@ -353,20 +354,19 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
 
                 # LLM 有话要说：写入历史并发送
                 if chat_type == "private":
-                    append_message(ADMIN_NUMBER, {"role": "assistant", "content": reply})
                     bot = get_bot()
-                    await send_chunked_raw(bot, "private", int(ADMIN_NUMBER), reply)
+                    result = await send_chunked_raw(bot, "private", int(ADMIN_NUMBER), reply)
+                    record_delivery(result, reply, lambda msg: append_message(ADMIN_NUMBER, msg))
                 else:
                     from .sticker_reply import prepare
                     reply, sticker = prepare(target_id, reply)
                     if not reply and not sticker:
                         return
-                    if reply:
-                        append_message(target_id, {"role": "assistant", "content": reply}, persona)
                     bot = get_bot()
                     options = {"sticker": sticker, "persona": persona} if sticker else {}
-                    await send_chunked_raw(bot, "group", int(target_id), reply, **options)
-                logger.info(f"心跳 [{chat_type}:{target_id}]: 已发送主动消息 ({len(reply)} 字)")
+                    result = await send_chunked_raw(bot, "group", int(target_id), reply, **options)
+                    record_delivery(result, reply, lambda msg: append_message(target_id, msg, persona))
+                logger.info(f"心跳 [{chat_type}:{target_id}]: 发送状态={getattr(result, 'status', 'unknown')} ({len(reply)} 字)")
                 return
 
             # 处理工具调用（LLM 在心跳中可以读写记忆等）

@@ -7,9 +7,19 @@ tests/test_chunker.py
 
 import sys
 import os
+import importlib.util
+from pathlib import Path
 
 # 将项目根目录加入 sys.path，使 plugins 可作为顶层包导入
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# 其他测试可能在收集期注入 chunker 桩；这里必须测试真实实现。
+_spec = importlib.util.spec_from_file_location("plugins.chunker", Path(__file__).resolve().parents[1] / "plugins/chunker.py")
+_chunker = importlib.util.module_from_spec(_spec)
+sys.modules["plugins.chunker"] = _chunker
+_spec.loader.exec_module(_chunker)
+if "plugins" in sys.modules:
+    sys.modules["plugins"].chunker = _chunker
 
 from plugins.chunker import chunk_text, CHUNK_THRESHOLD, MAX_CHUNK_CHARS
 

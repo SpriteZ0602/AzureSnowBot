@@ -5,6 +5,7 @@
 """
 
 import json
+from botcore.delivery import record_delivery
 from datetime import datetime
 from pathlib import Path
 
@@ -689,10 +690,10 @@ async def handle_chat(event: PrivateMessageEvent):
             if not tool_calls:
                 reply = (assistant_msg.get("content") or "").strip()
                 if reply:
-                    append_message(user_id, {"role": "assistant", "content": reply})
                     bot = get_bot()
                     chunks = chunk_text(reply)
-                    await send_chunked(bot, event, chunks, reply_first=False)
+                    result = await send_chunked(bot, event, chunks, reply_first=False)
+                    record_delivery(result, reply, lambda msg: append_message(user_id, msg))
                     reset_idle_timer("private")
                 return
 
@@ -700,9 +701,9 @@ async def handle_chat(event: PrivateMessageEvent):
             # （原实现会丢弃与 tool_calls 同现的 content）
             prelude = (assistant_msg.get("content") or "").strip()
             if prelude:
-                append_message(user_id, {"role": "assistant", "content": prelude})
                 bot = get_bot()
-                await send_chunked(bot, event, chunk_text(prelude), reply_first=False)
+                result = await send_chunked(bot, event, chunk_text(prelude), reply_first=False)
+                record_delivery(result, prelude, lambda msg: append_message(user_id, msg))
 
             # 处理工具调用
             messages.append(assistant_msg)
@@ -744,10 +745,10 @@ async def handle_chat(event: PrivateMessageEvent):
         except Exception:
             reply = "（工具调用轮次已达上限，请重新提问）"
         if reply:
-            append_message(user_id, {"role": "assistant", "content": reply})
             bot = get_bot()
             chunks = chunk_text(reply)
-            await send_chunked(bot, event, chunks, reply_first=False)
+            result = await send_chunked(bot, event, chunks, reply_first=False)
+            record_delivery(result, reply, lambda msg: append_message(user_id, msg))
         reset_idle_timer("private")
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")

@@ -8,6 +8,7 @@
 """
 
 import json
+from botcore.delivery import record_delivery
 from datetime import datetime
 
 import httpx
@@ -258,10 +259,10 @@ async def _handle_group_chat(
         reply, sticker = prepare_sticker(group_id, reply, requested_id=_tool_context.get("_requested_sticker"))
         if not reply and not sticker:
             return False
-        if reply:
-            append_message(group_id, {"role": "assistant", "content": reply}, active_persona)
         options = {"sticker": sticker, "persona": active_persona} if sticker else {}
-        await send_chunked(get_bot(), event, chunk_text(reply), **options)
+        result = await send_chunked(get_bot(), event, chunk_text(reply), **options)
+        if not record_delivery(result, reply, lambda msg: append_message(group_id, msg, active_persona)):
+            return False
         from .chatter import note_bot_reply
         note_bot_reply(group_id)
         if get_group_proactive(group_id):
@@ -292,9 +293,9 @@ async def _handle_group_chat(
             # 原本这段文字会被直接丢弃（不进历史、不发消息）。
             prelude = split_marker(readable_reply(assistant_msg))[0]
             if prelude:
-                append_message(group_id, {"role": "assistant", "content": prelude}, active_persona)
                 bot = get_bot()
-                await send_chunked(bot, event, chunk_text(prelude))
+                result = await send_chunked(bot, event, chunk_text(prelude))
+                record_delivery(result, prelude, lambda msg: append_message(group_id, msg, active_persona))
 
             messages.append(assistant_msg)
             logger.info(f"LLM 请求工具调用 (round {round_idx + 1}): "

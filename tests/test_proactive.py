@@ -80,7 +80,7 @@ def _make_pkg(name: str, path: str) -> types.ModuleType:
 # mock plugins.chunker
 _mock_chunker = types.ModuleType("plugins.chunker")
 _mock_chunker.chunk_text = lambda text: [text] if text else []
-_mock_chunker.send_chunked_raw = AsyncMock()
+_mock_chunker.send_chunked_raw = AsyncMock(return_value=types.SimpleNamespace(status="sent", message_ids=(), delivered_text=""))
 _save_and_set("plugins.chunker", _mock_chunker)
 
 # mock plugins.llm
