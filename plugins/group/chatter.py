@@ -10,6 +10,7 @@ Bot 每回一次话，该群插话概率乘 0.5；5 分钟内 Bot 没再说话�
 from __future__ import annotations
 
 from botcore.delivery import record_delivery
+from botcore.sessions import SessionInvalidated
 
 import random
 import time
@@ -243,5 +244,7 @@ async def handle_chatter(bot: Bot, event: GroupMessageEvent):
             if get_group_proactive(group_id):
                 reset_idle_timer(f"group:{group_id}")
             logger.info(f"群 {group_id} 热闹插话: {reply[:40]}")
+    except SessionInvalidated:
+        return
     finally:
         state.inflight = False

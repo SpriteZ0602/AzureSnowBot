@@ -1,7 +1,10 @@
 """把实际发送结果写入历史，保留已确认送达的片段。"""
 
+from .sessions import ensure_current
+
 
 def record_delivery(result, text: str, append) -> bool:
+    ensure_current()
     status = getattr(result, "status", "unknown")
     if status == "sent":
         if text:

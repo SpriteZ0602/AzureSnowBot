@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from nonebot.log import logger
 from botcore.tools import tool_result
+from botcore.sessions import ensure_current
 
 ARGUMENT_LIMIT = 200
 RESULT_LIMIT = 600
@@ -62,6 +63,7 @@ def record_tool_execution(name: str, arguments: dict, result: str, *, context: d
     if not gid.isdigit() or not isinstance(persona, str) or not persona:
         return
     try:
+        ensure_current()
         formatter = None
         if name.startswith("local__"):
             from .local_tools.manager import _registry

@@ -2,6 +2,7 @@
 
 import json
 from .tools import ToolResult, tool_result
+from .sessions import ensure_current
 
 
 async def run_agent(messages, *, request, dispatch, tools=None, source="unknown", max_rounds=10,
@@ -9,7 +10,9 @@ async def run_agent(messages, *, request, dispatch, tools=None, source="unknown"
     options = request_options or {}
     allowed = {t["function"]["name"] for t in tools or []}
     for _ in range(max_rounds):
+        ensure_current()
         data = await request(messages, tools=tools or None, source=source, **options)
+        ensure_current()
         assistant = data["choices"][0]["message"]
         calls = assistant.get("tool_calls")
         if not calls:
@@ -29,10 +32,13 @@ async def run_agent(messages, *, request, dispatch, tools=None, source="unknown"
             except (ValueError, TypeError) as exc:
                 result = ToolResult(f"[错误] {exc}", ok=False)
             else:
+                ensure_current()
                 result = tool_result(await dispatch(name, arguments))
+                ensure_current()
             if on_tool:
                 await on_tool(name, arguments, result)
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
     messages.append({"role": "user", "content": "你已经无法再调用工具了，请根据上面已经获取到的信息，直接回答用户的问题。"})
     data = await request(messages, source=source, **options)
+    ensure_current()
     return data["choices"][0]["message"]

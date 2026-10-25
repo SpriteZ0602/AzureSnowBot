@@ -21,6 +21,7 @@ key 格式:
 import asyncio
 import json
 from botcore.delivery import record_delivery
+from botcore.sessions import session_lock, SessionInvalidated
 import re
 from pathlib import Path
 
@@ -186,6 +187,8 @@ async def _idle_countdown(key: str, delay: float) -> None:
         _restart_full_timer(key)
     except asyncio.CancelledError:
         pass
+    except SessionInvalidated:
+        raise
     except Exception as e:
         logger.error(f"心跳异常 [{key}]: {e}")
 
@@ -227,6 +230,18 @@ async def run_heartbeat_key(key: str) -> None:
 
 
 async def run_heartbeat(chat_type: str, target_id: str) -> None:
+    persona = None
+    if chat_type == "group":
+        from .persona.manager import get_active_persona
+        persona = get_active_persona(target_id)
+    try:
+        async with session_lock(chat_type, target_id, persona):
+            await _run_heartbeat(chat_type, target_id, persona)
+    except SessionInvalidated:
+        return
+
+
+async def _run_heartbeat(chat_type: str, target_id: str, active_persona: str | None = None) -> None:
     """执行心跳：加载会话上下文 + 工具链，让 LLM 自主决定做什么。
 
     chat_type: "private" 或 "group"
@@ -287,7 +302,7 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
 
         if not get_group_proactive(target_id):
             return
-        persona = get_active_persona(target_id)
+        persona = active_persona or get_active_persona(target_id)
         persona_prompt = load_persona_prompt(persona, target_id)
         if persona_prompt is None:
             logger.warning(f"群 {target_id} 心跳: 人格 {persona} 的 prompt 不存在，跳过")
@@ -358,6 +373,8 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
                     options = {"sticker": sticker, "persona": persona} if sticker else {}
                     result = await send_chunked_raw(bot, "group", int(target_id), reply, **options)
                     record_delivery(result, reply, lambda msg: append_message(target_id, msg, persona))
+    except SessionInvalidated:
+        raise
     except Exception as e:
         logger.error(f"心跳 [{chat_type}:{target_id}] LLM 调用失败: {e}")
 

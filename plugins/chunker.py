@@ -25,6 +25,7 @@ import httpx
 
 from nonebot.adapters.onebot.v11 import Bot, MessageSegment, Message
 from nonebot.log import logger
+from botcore.sessions import ensure_current
 
 # ──────────────────── 配置 ────────────────────
 # 分条发送的阈值：短于此长度的回复直接整条发送
@@ -197,10 +198,12 @@ async def send_forward(
     注意：合并转发是 go-cqhttp 扩展 API，不在 OneBot v11 标准里。
     如果实现端不支持会抛异常，这里捕获并返回 False，不影响主流程。
     """
+    ensure_current()
     if not chunks:
         return SendResult("sent")
 
     nickname = await _get_self_nickname(bot)
+    ensure_current()
     nodes = build_forward_nodes(
         chunks, user_id=getattr(bot, "self_id", 0), nickname=nickname,
     )
@@ -223,6 +226,7 @@ async def send_forward(
 # ──────────────────── 分条发送 ────────────────────
 
 async def _send_sticker_unlocked(bot, target_id: int, sticker: dict, persona: str | None) -> SendResult | None:
+    ensure_current()
     from . import stickers as library
     gid = str(target_id)
     try:
@@ -283,6 +287,7 @@ async def send_chunked(
     key = _session_key(event)
 
     async with _session_locks[key]:
+        ensure_current()
         # 判断是群聊还是私聊
         group_id = getattr(event, "group_id", None)
         chat_type = "group" if group_id else "private"
@@ -302,6 +307,7 @@ async def send_chunked(
 
         message_ids = []
         for i, chunk in enumerate(chunks):
+            ensure_current()
             # 第一条引用原消息
             if i == 0 and reply_first and hasattr(event, "message_id"):
                 msg = MessageSegment.reply(event.message_id) + chunk
@@ -353,6 +359,7 @@ async def send_chunked_raw(
     key = f"{'g' if chat_type == 'group' else 'u'}:{target_id}"
 
     async with _session_locks[key]:
+        ensure_current()
         if chat_type == "group" and sticker and persona is None:
             from .persona.manager import get_active_persona
             persona = get_active_persona(str(target_id))
@@ -366,6 +373,7 @@ async def send_chunked_raw(
 
         message_ids = []
         for i, chunk in enumerate(chunks):
+            ensure_current()
             msg = Message(chunk)
 
             try:

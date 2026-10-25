@@ -13,6 +13,7 @@
 
 import json
 from botcore.delivery import record_delivery
+from botcore.sessions import session_lock, ensure_current, SessionInvalidated
 from botcore.storage import atomic_write_json
 import asyncio
 import uuid
@@ -345,6 +346,7 @@ def _job_persona(job: ReminderJob) -> str | None:
 
 
 async def _send_job_result(bot, job: ReminderJob, text: str, persona: str | None):
+    ensure_current()
     options = {}
     if job.chat_type == "group":
         from ..sticker_reply import prepare
@@ -355,6 +357,7 @@ async def _send_job_result(bot, job: ReminderJob, text: str, persona: str | None
             from ..chunker import SendResult
             return SendResult("sent")
     result = await send_chunked_raw(bot, job.chat_type, int(job.target_id), text, **options)
+    ensure_current()
     record_delivery(result, text, lambda msg: _append_to_history(job, msg["content"], persona))
     return result
 
@@ -377,15 +380,17 @@ async def _fire(job: ReminderJob) -> None:
         try:
             bot = get_bot()
             persona = _job_persona(job)
-            if not job.delivery_text:
-                job.delivery_text = await _generate_reminder_message(job)
-                if (datetime.now() - fire_at).total_seconds() > 60:
-                    job.delivery_text = f"（延迟提醒）{job.delivery_text}"
-            if _jobs.get(job.id) is not job:
-                return
-            job.delivery_state = "sending"
-            _save()  # 必须在发送之前持久化，崩溃后不得盲目重发。
-            result = await _send_job_result(bot, job, job.delivery_text, persona)
+            async with session_lock(job.chat_type, job.target_id, persona):
+                if not job.delivery_text:
+                    job.delivery_text = await _generate_reminder_message(job)
+                    if (datetime.now() - fire_at).total_seconds() > 60:
+                        job.delivery_text = f"（延迟提醒）{job.delivery_text}"
+                if _jobs.get(job.id) is not job:
+                    return
+                ensure_current()
+                job.delivery_state = "sending"
+                _save()  # 必须在发送之前持久化，崩溃后不得盲目重发。
+                result = await _send_job_result(bot, job, job.delivery_text, persona)
             state = getattr(result, "status", "unknown")
             ids = getattr(result, "message_ids", ())
             job.delivery_message_ids = list(ids) if isinstance(ids, (tuple, list)) else []
@@ -405,6 +410,11 @@ async def _fire(job: ReminderJob) -> None:
             if job.delivery_state == "unknown":
                 logger.warning(f"提醒发送状态未知，保留任务待核对，不自动重发: [{job.id}]")
                 return
+        except SessionInvalidated:
+            if job.delivery_state == "sending":
+                job.delivery_state = "unknown"
+                _save()
+            return
         except Exception as exc:
             # 已进入 sending 后的异常无法确认 QQ 是否收到。
             if job.delivery_state == "sending":
@@ -443,13 +453,14 @@ async def _fire_daily(job: ReminderJob) -> None:
         try:
             bot = get_bot()
             persona = _job_persona(job)
-            if job.mode == "task":
-                text = await _execute_scheduled_task(job)
-            else:
-                text = await _generate_reminder_message(job)
+            async with session_lock(job.chat_type, job.target_id, persona):
+                if job.mode == "task":
+                    text = await _execute_scheduled_task(job)
+                else:
+                    text = await _generate_reminder_message(job)
 
-            # 分条发送
-            result = await _send_job_result(bot, job, text, persona)
+                # 分条发送
+                result = await _send_job_result(bot, job, text, persona)
             job.delivery_state = getattr(result, "status", "unknown")
             if job.delivery_state not in {"sent", "failed"}:
                 job.delivery_state = "unknown"
@@ -460,6 +471,8 @@ async def _fire_daily(job: ReminderJob) -> None:
 
             kind = "任务" if job.mode == "task" else "提醒"
             logger.info(f"每日{kind}发送状态={job.delivery_state}: [{job.id}] {job.daily_time}")
+        except SessionInvalidated:
+            logger.info(f"每日任务因会话重置放弃本次输出 [{job.id}]")
         except Exception as e:
             logger.error(f"每日提醒发送失败 [{job.id}]: {e}")
 

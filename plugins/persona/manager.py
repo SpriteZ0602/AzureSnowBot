@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from nonebot.log import logger
 from botcore.paths import confined_path, validate_group_id, validate_name
+from botcore.sessions import invalidate
 
 from ..history_io import append_jsonl_message, clear_jsonl_history, load_jsonl_history
 
@@ -201,6 +202,9 @@ def set_active_persona(group_id: str, persona_name: str) -> None:
     """设置该群激活的人格"""
     validate_name(persona_name)
     config = _load_group_config(group_id)
+    old = config.get("active_persona", DEFAULT_PERSONA)
+    if old != persona_name:
+        invalidate("group", group_id, old)
     config["active_persona"] = persona_name
     _save_group_config(group_id, config)
 
@@ -275,4 +279,5 @@ def clear_history(group_id: str, persona_name: str | None = None) -> None:
     """清除指定群 + 人格的对话历史"""
     if persona_name is None:
         persona_name = get_active_persona(group_id)
+    invalidate("group", group_id, persona_name)
     clear_jsonl_history(_session_path(group_id, persona_name))

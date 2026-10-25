@@ -527,3 +527,4 @@ python -c "import ast; ast.parse(open('plugins/chat/proactive.py', encoding='utf
 
 - `botcore.agent.run_agent` 是群聊、Admin 私聊、心跳、定时任务和 Sub-Agent 共用的循环；`plugins/tool_dispatch.py` 统一执行 Skill → 本地 → MCP 和两类记录，入口不得再复制循环。模型只能执行本轮公开的工具，参数必须是 JSON 对象；Sub-Agent 在执行层拒绝主对话专属工具。
 - 工具结果经 `botcore.tools.ToolResult` 携带状态，旧文本结果只在 `tool_result()` 中适配；日志与历史共用状态，不能各自解析错误前缀。所有聊天补全请求（包括压缩、提醒、蒸馏和 Sub-Agent）走 `plugins.llm.call_llm` 的 fallback；蒸馏可用 `model_override` 选择主 provider 的小模型。
+- `botcore.sessions` 管理会话锁与版本：主对话、心跳、提醒/定时任务和插话共用 `(chat_type, target_id, persona)`；reset 或切换旧人格会使旧版本失效，旧模型结果、排队请求及后续工具/发送不得继续。模型等待期间不强杀后台调度器，`SessionInvalidated` 由入口静默处理；调度等待时间不持有会话锁。

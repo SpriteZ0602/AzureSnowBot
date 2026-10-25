@@ -53,7 +53,9 @@ async def handle_group_compact(event: GroupMessageEvent):
     persona = get_active_persona(group_id)
     session_path = persona_session_path(group_id, persona)
     memory_path = group_memory_path(group_id)  # data/groups/<群号>/MEMORY.md
-    compacted = await compact_history(group_id, session_path, memory_path)
+    from botcore.sessions import session_lock
+    async with session_lock("group", group_id, persona):
+        compacted = await compact_history(group_id, session_path, memory_path)
     if compacted:
         await group_compact.finish("本群对话历史已压缩。")
     else:

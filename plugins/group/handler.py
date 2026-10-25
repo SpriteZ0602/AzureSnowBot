@@ -9,6 +9,7 @@
 
 import json
 from botcore.delivery import record_delivery
+from botcore.sessions import SessionInvalidated
 from datetime import datetime
 
 import httpx
@@ -84,8 +85,11 @@ async def handle_group_chat(event: GroupMessageEvent):
     # 会话级锁：同一 (群, 人格) 的请求串行处理。
     # 不加锁时两人同时 @Bot 会并发读写同一份历史并各自跑 Agentic Loop，
     # 导致问题得不到回答、工具调用结果互相混淆。
-    async with get_session_lock(group_id, active_persona):
-        await _handle_group_chat(event, group_id, active_persona, user_input)
+    try:
+        async with get_session_lock(group_id, active_persona):
+            await _handle_group_chat(event, group_id, active_persona, user_input)
+    except SessionInvalidated:
+        return
 
 
 async def _handle_group_chat(
@@ -283,12 +287,16 @@ async def _handle_group_chat(
             assistant = await run_agent(messages, request=call_llm, dispatch=dispatch,
                 tools=openai_tools, source="group", max_rounds=MAX_TOOL_ROUNDS,
                 on_prelude=prelude, on_tool=on_tool, request_options=format_kwargs)
+        except SessionInvalidated:
+            raise
         except Exception:
             if not sticker_results:
                 raise
             await send_final(sticker_result_reply())
             return
         await send_final(readable_reply(assistant, final=True))
+    except SessionInvalidated:
+        return
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await group_chat.finish(f"API 请求失败 ({e.response.status_code})")

@@ -6,6 +6,7 @@
 
 import json
 from botcore.delivery import record_delivery
+from botcore.sessions import session_lock, invalidate, SessionInvalidated
 from datetime import datetime
 from pathlib import Path
 
@@ -180,6 +181,7 @@ def append_message(user_id: str, message: dict) -> None:
 
 def clear_history(user_id: str) -> None:
     """清除用户的对话历史"""
+    invalidate("private", str(user_id))
     clear_jsonl_history(_session_path(user_id))
 
 
@@ -550,6 +552,14 @@ chat = on_message(rule=is_private_event, priority=99, block=False)
 
 @chat.handle()
 async def handle_chat(event: PrivateMessageEvent):
+    try:
+        async with session_lock("private", str(event.user_id)):
+            await _handle_chat(event)
+    except SessionInvalidated:
+        return
+
+
+async def _handle_chat(event: PrivateMessageEvent):
     user_input = event.get_plaintext().strip()
     if not user_input:
         return
@@ -691,6 +701,8 @@ async def handle_chat(event: PrivateMessageEvent):
             result = await send_chunked(get_bot(), event, chunk_text(reply), reply_first=False)
             record_delivery(result, reply, lambda msg: append_message(user_id, msg))
         reset_idle_timer("private")
+    except SessionInvalidated:
+        return
     except httpx.HTTPStatusError as e:
         logger.error(f"OpenAI API 错误: {e.response.status_code} {e.response.text}")
         await chat.finish(f"API 请求失败 ({e.response.status_code})")

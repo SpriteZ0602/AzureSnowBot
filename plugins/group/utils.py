@@ -262,15 +262,6 @@ def handle_whitelist_command(text: str) -> str:
 # 同一 (群, 人格) 的对话请求串行处理：
 # 多人同时 @Bot 时，若并发跑 Agentic Loop，会互相读到对方的消息历史、
 # 混淆工具调用结果、交错写入 history.jsonl。锁保证每个问题拿到完整的一轮。
-_session_locks: dict[tuple[str, str], asyncio.Lock] = {}
-
-
-def get_session_lock(group_id: str, persona: str) -> asyncio.Lock:
-    """获取 (群, 人格) 维度的会话锁，同一会话的请求串行执行。"""
-    key = (group_id, persona)
-    lock = _session_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _session_locks[key] = lock
-    return lock
-
+def get_session_lock(group_id: str, persona: str):
+    from botcore.sessions import session_lock
+    return session_lock("group", group_id, persona)
