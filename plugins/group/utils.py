@@ -5,6 +5,7 @@
 """
 
 import asyncio
+from botcore.storage import atomic_write_text
 import json
 from pathlib import Path
 
@@ -202,9 +203,9 @@ def _persist_whitelist() -> None:
                 break
         else:
             lines.append(line)
-        ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        atomic_write_text(ENV_PATH, '\n'.join(lines) + '\n')
     else:
-        ENV_PATH.write_text(line + "\n", encoding="utf-8")
+        atomic_write_text(ENV_PATH, line + '\n')
 
 
 def handle_whitelist_command(text: str) -> str:

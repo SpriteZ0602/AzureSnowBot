@@ -14,6 +14,7 @@
 """
 
 import json
+from botcore.storage import atomic_write_json, load_json
 import time
 import threading
 from pathlib import Path
@@ -54,19 +55,15 @@ class MaimaiError(Exception):
 # ──────────────────── Token 存储 ────────────────────
 
 def _load_tokens() -> dict:
-    if not TOKENS_PATH.exists():
-        return {}
-    try:
-        return json.loads(TOKENS_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+    value = load_json(TOKENS_PATH)
+    if not isinstance(value, dict):
+        raise MaimaiError("Token 文件损坏，已保留原文件，请管理员检查")
+    return value
 
 
 def _save_tokens(tokens: dict) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    TOKENS_PATH.write_text(
-        json.dumps(tokens, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    atomic_write_json(TOKENS_PATH, tokens)
 
 
 def get_token(qq: str) -> str | None:

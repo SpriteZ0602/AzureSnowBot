@@ -88,6 +88,14 @@ def test_persona_symlink_cannot_delete_outside_file(tmp_path):
         pm.delete_group_persona("123", "linked")
     assert victim.exists()
 
+
+def test_corrupt_group_config_is_preserved():
+    path = pm._config_path("123")
+    path.write_text('{"broken":', encoding="utf-8")
+    with pytest.raises(ValueError):
+        pm.set_listen_all("123", True)
+    assert path.read_text(encoding="utf-8") == '{"broken":'
+
 class TestListPersonas:
     """测试人格列表"""
 

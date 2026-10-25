@@ -1,6 +1,7 @@
 """配置编辑路由"""
 
 import re
+from botcore.storage import atomic_write_text
 from io import StringIO
 from pathlib import Path
 
@@ -112,5 +113,5 @@ async def update_admin_file(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"不允许编辑文件 '{filename}'")
     path = confined_path(ADMIN_DIR, filename)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(req.content, encoding="utf-8")
+    atomic_write_text(path, req.content)
     return {"ok": True}

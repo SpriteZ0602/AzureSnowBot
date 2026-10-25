@@ -1,6 +1,7 @@
 """记忆管理路由"""
 
 from pathlib import Path
+from botcore.storage import atomic_write_text
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -80,7 +81,7 @@ async def update_memory_content(
     """更新 MEMORY.md 并刷新索引"""
     path = _memory_path(scope)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(req.content, encoding="utf-8")
+    atomic_write_text(path, req.content)
 
     # 仅 admin 记忆触发索引刷新
     if scope == "admin":

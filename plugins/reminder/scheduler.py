@@ -76,6 +76,7 @@ class ReminderJob:
 # ──────────────────── 运行时状态 ────────────────────
 _jobs: dict[str, ReminderJob] = {}
 _tasks: dict[str, asyncio.Task] = {}
+_storage_error = False
 _lock = asyncio.Lock()  # 保护 _jobs 和 _save() 的并发访问
 
 
@@ -83,20 +84,24 @@ _lock = asyncio.Lock()  # 保护 _jobs 和 _save() 的并发访问
 
 def _save() -> None:
     """保存所有提醒到磁盘"""
+    if _storage_error:
+        raise ValueError("提醒原文件损坏，已禁止覆盖，请修复后重启")
     data = {jid: asdict(job) for jid, job in _jobs.items()}
     atomic_write_json(REMINDERS_FILE, data)
 
 
 def _load() -> dict[str, ReminderJob]:
     """从磁盘读取提醒"""
+    global _storage_error
     if not REMINDERS_FILE.exists():
         return {}
     try:
         data = json.loads(REMINDERS_FILE.read_text(encoding="utf-8"))
         return {jid: ReminderJob(**info) for jid, info in data.items()}
     except Exception as e:
-        logger.error(f"加载提醒数据失败: {e}")
-        return {}
+        _storage_error = True
+        logger.error(f"加载提醒数据失败，已保留原文件: {type(e).__name__}")
+        raise ValueError("提醒文件损坏，已禁止覆盖") from e
 
 
 # ──────────────────── LLM 生成提醒消息 ────────────────────

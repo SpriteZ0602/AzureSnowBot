@@ -403,8 +403,8 @@ async def _run_heartbeat(chat_type: str, target_id: str, active_persona: str | N
                 if text_parts:
                     memories_path = Path("data/admin/memories.jsonl")
                     await distill_memories("\n".join(text_parts), memories_path)
-                    cfg["last_distill_line"] = len(all_history)
-                    _save_config(ADMIN_NUMBER, cfg)
+                    from botcore.storage import update_json
+                    update_json(Path("data/admin/config.json"), {"last_distill_line": len(all_history)})
         except Exception as e:
             logger.debug(f"心跳蒸馏跳过: {e}")
 

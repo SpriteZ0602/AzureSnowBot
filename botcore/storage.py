@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+from functools import wraps
 from pathlib import Path
 from threading import RLock
 from contextlib import contextmanager
@@ -17,6 +18,14 @@ def file_lock(path: Path):
         lock = _locks.setdefault(path.resolve(), RLock())
     with lock:
         yield
+
+
+def serialized_file(fn):
+    @wraps(fn)
+    def locked(path, *args, **kwargs):
+        with file_lock(path):
+            return fn(path, *args, **kwargs)
+    return locked
 
 
 def atomic_write_text(path: Path, content: str) -> None:

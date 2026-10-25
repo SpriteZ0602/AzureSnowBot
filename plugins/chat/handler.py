@@ -6,6 +6,7 @@
 
 import json
 from botcore.delivery import record_delivery
+from botcore.storage import load_json, update_json
 from botcore.sessions import session_lock, invalidate, SessionInvalidated
 from datetime import datetime
 from pathlib import Path
@@ -128,18 +129,15 @@ def _config_path(user_id: str) -> Path:
 
 
 def _load_config(user_id: str) -> dict:
-    path = _config_path(user_id)
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            pass
-    return {}
+    value = load_json(_config_path(user_id))
+    if not isinstance(value, dict):
+        raise ValueError("Admin 配置必须是 JSON 对象，已保留原文件")
+    return value
 
 
 def _save_config(user_id: str, cfg: dict) -> None:
     path = _config_path(user_id)
-    path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    update_json(path, cfg)
 
 
 def get_config(user_id: str) -> dict:
@@ -174,9 +172,7 @@ def append_message(user_id: str, message: dict) -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     append_jsonl_message(_session_path(user_id), message)
     # 更新 last_message_at
-    cfg = _load_config(user_id)
-    cfg["last_message_at"] = now
-    _save_config(user_id, cfg)
+    update_json(_config_path(user_id), {"last_message_at": now})
 
 
 def clear_history(user_id: str) -> None:

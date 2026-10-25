@@ -15,6 +15,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+from botcore.storage import atomic_write_json
 
 from nonebot.log import logger
 
@@ -25,24 +26,26 @@ STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
 # ──────────────────── 内存状态 ────────────────────
 _lock = Lock()
 _stats: dict = {}
+_persistence_error = False
 
 
 def _load_stats() -> dict:
-    global _stats
+    global _stats, _persistence_error
     if STATS_FILE.exists():
         try:
             _stats = json.loads(STATS_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             _stats = {}
+            _persistence_error = True
+            logger.warning("Token 统计文件读取失败，已保留原文件并停止覆盖；修复后重启恢复持久化")
     return _stats
 
 
 def _save_stats() -> None:
+    if _persistence_error:
+        return
     try:
-        STATS_FILE.write_text(
-            json.dumps(_stats, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(STATS_FILE, _stats)
     except OSError as e:
         logger.debug(f"Token stats 保存失败: {e}")
 

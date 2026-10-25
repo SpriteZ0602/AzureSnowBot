@@ -1,6 +1,7 @@
 """人格管理路由"""
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from botcore.storage import atomic_write_text
 from pydantic import BaseModel
 
 from ..auth import get_current_user
@@ -108,12 +109,12 @@ async def create_persona(req: PersonaCreateRequest, _user: str = Depends(get_cur
         if persona_exists(req.name, req.group_id):
             raise HTTPException(status.HTTP_409_CONFLICT, f"人格 '{req.name}' 已存在")
         group_path.parent.mkdir(parents=True, exist_ok=True)
-        group_path.write_text(req.prompt.strip(), encoding="utf-8")
+        atomic_write_text(group_path, req.prompt.strip())
     else:
         path = global_path
         if path.exists():
             raise HTTPException(status.HTTP_409_CONFLICT, f"通用人格 '{req.name}' 已存在")
-        path.write_text(req.prompt.strip(), encoding="utf-8")
+        atomic_write_text(path, req.prompt.strip())
 
     return {"ok": True, "name": req.name}
 
@@ -131,7 +132,7 @@ async def update_persona(
 
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"人格 '{name}' 不存在")
-    path.write_text(req.prompt.strip(), encoding="utf-8")
+    atomic_write_text(path, req.prompt.strip())
     return {"ok": True}
 
 

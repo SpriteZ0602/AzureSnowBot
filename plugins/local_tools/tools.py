@@ -11,6 +11,7 @@
 """
 
 from datetime import datetime
+from botcore.storage import atomic_write_text
 from pathlib import Path
 
 from nonebot.log import logger
@@ -212,7 +213,7 @@ async def write_file_tool(
 
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        atomic_write_text(target, content)
         return f"已写入 {path}（{len(content)} 字符）"
     except Exception as e:
         return f"[错误] 写入失败: {e}"

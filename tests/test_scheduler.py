@@ -478,6 +478,19 @@ async def test_restart_does_not_resend_interrupted_delivery(monkeypatch):
     send.assert_not_awaited()
 
 
+def test_corrupt_reminder_file_is_not_overwritten(tmp_path, monkeypatch):
+    from plugins.reminder import scheduler
+    path = tmp_path / "reminders.json"
+    path.write_text('{"broken":', encoding="utf-8")
+    monkeypatch.setattr(scheduler, "REMINDERS_FILE", path)
+    monkeypatch.setattr(scheduler, "_storage_error", False)
+    with pytest.raises(ValueError):
+        scheduler._load()
+    with pytest.raises(ValueError):
+        scheduler._save()
+    assert path.read_text(encoding="utf-8") == '{"broken":'
+
+
 # ──────────────────── get_reminders ────────────────────
 
 class TestGetReminders:

@@ -19,6 +19,9 @@ import httpx
 from nonebot.log import logger
 
 from ..llm import API_KEY, BASE_URL, MODEL
+from botcore.storage import atomic_write_text, serialized_file, update_json
+from botcore.sessions import ensure_current
+
 from ..history_io import load_jsonl_history, rewrite_compacted_history
 
 # ──────────────────── 阈值配置 ────────────────────
@@ -234,6 +237,7 @@ async def extract_memories(messages: list[dict], existing_memory: str) -> dict[s
     return _parse_memory_extractions(raw)
 
 
+@serialized_file
 def merge_memories_into_file(memory_path: Path, extractions: dict[str, list[str]]) -> None:
     """
     将提取的记忆条目合并到 MEMORY.md 文件中。
@@ -242,6 +246,7 @@ def merge_memories_into_file(memory_path: Path, extractions: dict[str, list[str]
     if not extractions:
         return
 
+    ensure_current()
     memory_path.parent.mkdir(parents=True, exist_ok=True)
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -284,7 +289,7 @@ def merge_memories_into_file(memory_path: Path, extractions: dict[str, list[str]
             for entry in entries:
                 new_lines.append(f"- [{today}] {entry}")
 
-    memory_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    atomic_write_text(memory_path, "\n".join(new_lines) + "\n")
     logger.info(f"Compaction: 已将 {sum(len(v) for v in extractions.values())} 条记忆写入 MEMORY.md")
 
 
@@ -356,6 +361,7 @@ async def compact_history(
 
     # Step 4: 原子重写 JSONL，并保留两次 LLM 调用期间新追加的消息。
     # 若原历史已被 reset/另一轮 compact 改写，则放弃本轮旧快照，避免覆盖新状态。
+    ensure_current()
     final_messages = rewrite_compacted_history(session_path, messages, new_messages)
     if final_messages is None:
         logger.warning("Compaction: 历史在压缩期间已被修改，放弃写入旧快照")
@@ -388,14 +394,7 @@ async def compact_history(
 
     # Step 7: 重置蒸馏水位线（Compaction 重写了 history，行数全变了）
     try:
-        import json as _json
-        cfg_path = session_path.parent / "config.json"
-        if cfg_path.exists():
-            cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
-        else:
-            cfg = {}
-        cfg["last_distill_line"] = len(final_messages)
-        cfg_path.write_text(_json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        update_json(session_path.parent / "config.json", {"last_distill_line": len(final_messages)})
     except Exception as e:
         logger.debug(f"重置蒸馏水位线失败: {e}")
 

@@ -21,6 +21,7 @@ from pathlib import Path
 from nonebot.log import logger
 from botcore.paths import confined_path, validate_group_id, validate_name
 from botcore.sessions import invalidate
+from botcore.storage import atomic_write_text, load_json, update_json
 
 from ..history_io import append_jsonl_message, clear_jsonl_history, load_jsonl_history
 
@@ -142,7 +143,7 @@ def load_persona_prompt(name: str, group_id: str | None = None) -> str | None:
 def create_group_persona(group_id: str, name: str, prompt: str) -> None:
     """创建群私有人格"""
     path = _persona_path(_group_persona_dir(group_id), name)
-    path.write_text(prompt.strip(), encoding="utf-8")
+    atomic_write_text(path, prompt.strip())
 
 
 def delete_group_persona(group_id: str, name: str) -> bool:
@@ -168,19 +169,16 @@ def _config_path(group_id: str) -> Path:
 
 def _load_group_config(group_id: str) -> dict:
     """读取群组配置"""
-    path = _config_path(group_id)
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            pass
-    return {}
+    value = load_json(_config_path(group_id))
+    if not isinstance(value, dict):
+        raise ValueError("群配置必须是 JSON 对象，已保留原文件")
+    return value
 
 
 def _save_group_config(group_id: str, config: dict) -> None:
     """写入群组配置"""
     path = _config_path(group_id)
-    path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    update_json(path, config)
 
 
 def get_group_config(group_id: str) -> dict:
@@ -219,9 +217,7 @@ def get_listen_all(group_id: str) -> bool:
 
 def set_listen_all(group_id: str, enabled: bool) -> None:
     """设置该群的全量消息读取模式"""
-    config = _load_group_config(group_id)
-    config["listen_all"] = bool(enabled)
-    _save_group_config(group_id, config)
+    update_json(_config_path(group_id), {"listen_all": bool(enabled)})
 
 
 # ──────────────────── 群聊主动对话开关 ────────────────────
@@ -234,9 +230,7 @@ def get_group_proactive(group_id: str) -> bool:
 
 def set_group_proactive(group_id: str, enabled: bool) -> None:
     """设置该群的主动对话开关"""
-    config = _load_group_config(group_id)
-    config["proactive_enabled"] = bool(enabled)
-    _save_group_config(group_id, config)
+    update_json(_config_path(group_id), {"proactive_enabled": bool(enabled)})
 
 
 # ──────────────────── 群聊复读 / 插话开关 ────────────────────
@@ -249,9 +243,7 @@ def get_auto_trigger(group_id: str) -> bool:
 
 def set_auto_trigger(group_id: str, enabled: bool) -> None:
     """设置该群的复读 / 插话开关"""
-    config = _load_group_config(group_id)
-    config["auto_trigger_enabled"] = bool(enabled)
-    _save_group_config(group_id, config)
+    update_json(_config_path(group_id), {"auto_trigger_enabled": bool(enabled)})
 
 
 # ──────────────────── 会话持久化（按 persona 隔离） ────────────────────
@@ -270,9 +262,7 @@ def append_message(group_id: str, message: dict, persona_name: str | None = None
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     append_jsonl_message(_session_path(group_id, persona_name), message)
     # 更新 last_message_at
-    config = _load_group_config(group_id)
-    config["last_message_at"] = now
-    _save_group_config(group_id, config)
+    update_json(_config_path(group_id), {"last_message_at": now})
 
 
 def clear_history(group_id: str, persona_name: str | None = None) -> None:

@@ -1,6 +1,7 @@
 """技能管理路由"""
 
 from pathlib import Path
+from botcore.storage import atomic_write_text
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -84,7 +85,7 @@ async def create_skill(req: SkillCreateRequest, _user: str = Depends(get_current
 
     skill_dir.mkdir(parents=True, exist_ok=True)
     content = f"---\nname: {req.name}\ndescription: {req.description}\n---\n\n{req.body}"
-    skill_file.write_text(content, encoding="utf-8")
+    atomic_write_text(skill_file, content)
 
     # 重新扫描技能目录
     from ...skill.manager import scan_skills
@@ -105,7 +106,7 @@ async def update_skill(name: str, req: SkillUpdateRequest, _user: str = Depends(
 
     desc = req.description or meta.description
     content = f"---\nname: {name}\ndescription: {desc}\n---\n\n{req.body}"
-    _skill_file(meta).write_text(content, encoding="utf-8")
+    atomic_write_text(_skill_file(meta), content)
 
     from ...skill.manager import scan_skills
     scan_skills()
