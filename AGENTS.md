@@ -531,3 +531,5 @@ python -c "import ast; ast.parse(open('plugins/chat/proactive.py', encoding='utf
 - `botcore.storage` 提供原子文本/JSON 写入和按路径串行的字段更新；群/Admin 配置、提醒、记忆合并、人格、凭证、统计和 Dashboard 文件修改复用它。配置与提醒损坏时拒绝覆盖原文件；统计读取失败时保留文件并停写。心跳/压缩只更新自己的水位线字段，不能用 LLM 等待前的整个配置快照覆盖新设置。
 
 - 生命周期入口已移到 `group_plugin.py`、`chat_plugin.py`、`persona_plugin.py`、`skill_plugin.py`、`local_tools_plugin.py`、`reminder_plugin.py` 和 `dashboard_plugin.py`。数据目录、命令和生产启动命令沿用现有约定。
+
+- `sticker_transport.image_source` 对 4 MiB 以内图片在线程中读取/编码；更大文件以 512 KiB 块走 NapCat `upload_file_stream`，核验分块回执、字节数和 SHA256 后，使用 NapCat 返回的路径发送。该阈值只选择传输方式，不限制收藏大小。旧 NapCat 不支持上传扩展时明确失败，图库不删除，也不回退整张巨量 Base64。流式临时文件 5 分钟回收，列表按需上传并短期复用远端路径。Dashboard 图片使用鉴权 FileResponse 流。

@@ -1,9 +1,9 @@
 """群内 /表情列表，以及仅 Admin 私聊可用的 /自动表情。"""
 
 import asyncio
-import base64
 import json
 import re
+import time
 from dataclasses import dataclass
 
 from nonebot import get_driver, on_message
@@ -20,33 +20,41 @@ SEND_INTERVAL = 1.0
 _ORDINAL = re.compile(r"^表情条目 ([0-9]+)$", re.MULTILINE)
 
 
-def list_batches(gid: str, user_id: int, nickname: str, *, entries=None, missing=None):
-    """流式建立有界请求；图片字节从不进入聊天历史或工具管理日志。"""
-    entries = library.items(gid) if entries is None else entries
-    missing = set() if missing is None else missing
+async def transport_batches(bot, gid, user_id, nickname, *, entries, missing):
+    """生产发送按图片逐项准备，大图只在节点中引用 NapCat 已上传的文件。"""
+    from .sticker_transport import image_source
+    from botcore.sessions import ensure_current
     tags = sorted({tag for item in entries for tag in item["tags"]})
-    batch = []
-    ordinal = 0
+    batch, ordinal, file_bytes = [], 0, 0
+    remote = {}
     for tag in tags:
         for item in entries:
             if tag not in item["tags"]:
                 continue
             ordinal += 1
+            ensure_current()
             try:
-                _, content = library.read_image(gid, item["id"])
-            except (OSError, library.StickerError):
+                cached = remote.get(item["id"])
+                if cached and time.monotonic() - cached[0] < 180:
+                    saved, source = item, cached[1]
+                else:
+                    saved, source = await image_source(bot, gid, item["id"], library=library)
+                    if not source.startswith("base64://"):
+                        remote[item["id"]] = time.monotonic(), source
+            except FileNotFoundError:
                 missing.add(item["id"])
-                logger.warning(f"群 {gid} 表情列表条目 {ordinal} 文件不可读，继续发送其他收藏")
                 continue
-            image = {"type": "image", "data": {"file": "base64://" + base64.b64encode(content).decode("ascii")}}
-            candidate = {"type": "node", "data": {"user_id": user_id, "nickname": nickname,
-                "content": [{"type": "text", "data": {"text": f"[{tag}]：\n表情条目 {ordinal}\n"}}, image]}}
-            size = len(json.dumps({"action": "send_group_forward_msg", "params": {
-                "group_id": int(gid), "messages": batch + [candidate]}}).encode("utf-8"))
-            if batch and (len(batch) >= MAX_BATCH_IMAGES or size > MAX_BATCH_BYTES):
+            node = {"type": "node", "data": {"user_id": user_id, "nickname": nickname,
+                "content": [{"type": "text", "data": {"text": f"[{tag}]：\n表情条目 {ordinal}\n"}},
+                            {"type": "image", "data": {"file": source}}]}}
+            request_size = len(json.dumps({"action": "send_group_forward_msg", "params": {
+                "group_id": int(gid), "messages": batch + [node]}}).encode("utf-8"))
+            if batch and (len(batch) >= MAX_BATCH_IMAGES or request_size > MAX_BATCH_BYTES
+                          or file_bytes + saved["size"] > MAX_BATCH_BYTES):
                 yield batch
-                batch = []
-            batch.append(candidate)
+                batch, file_bytes = [], 0
+            batch.append(node)
+            file_bytes += saved["size"]
     if batch:
         yield batch
 
@@ -135,24 +143,28 @@ async def send_list(bot, gid: str, *, entries=None) -> ListResult:
         logger.info(f"群 {gid} 表情列表第 {result.batches} 批：请求 {len(batch)} 项，确认 {len(verified)} 项，累计 {result.displayed}/{result.total}")
         return verified
 
-    async with _session_locks[f"g:{gid}"]:
-        for batch in list_batches(gid, int(bot.self_id), nickname, entries=entries, missing=missing):
-            verified = await deliver(batch)
-            if verified is None:
-                break
-            # NapCat 非 packet 路径可能吞掉部分节点。只补发已经核对为缺失的项。
-            incomplete = False
-            for node in batch:
-                if _node_ordinal(node) in verified:
-                    continue
-                repaired = await deliver([node])
-                if repaired != {_node_ordinal(node)}:
-                    if repaired is not None:
-                        result.status, result.detail = "failed", "已确认部分转发节点未送达，单项补发仍不完整"
-                    incomplete = True
+    try:
+        async with _session_locks[f"g:{gid}"]:
+            async for batch in transport_batches(bot, gid, int(bot.self_id), nickname, entries=entries, missing=missing):
+                verified = await deliver(batch)
+                if verified is None:
                     break
-            if incomplete:
-                break
+                # NapCat 非 packet 路径可能吞掉部分节点。只补发已经核对为缺失的项。
+                incomplete = False
+                for node in batch:
+                    if _node_ordinal(node) in verified:
+                        continue
+                    repaired = await deliver([node])
+                    if repaired != {_node_ordinal(node)}:
+                        if repaired is not None:
+                            result.status, result.detail = "failed", "已确认部分转发节点未送达，单项补发仍不完整"
+                        incomplete = True
+                        break
+                if incomplete:
+                    break
+    except Exception as exc:
+        result.status = _delivery_error(exc).status
+        result.detail = f"图片准备或上传失败（{type(exc).__name__}），已保留此前进度"
     result.missing = len(missing)
     if result.status == "sent" and result.displayed != result.total:
         result.status, result.detail = "failed", f"{result.missing} 张收藏文件不可读，已继续发送其他可用图片"

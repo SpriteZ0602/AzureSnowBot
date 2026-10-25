@@ -17,7 +17,6 @@
 import re
 import asyncio
 import random
-import base64
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -25,7 +24,7 @@ import httpx
 
 from nonebot.adapters.onebot.v11 import Bot, MessageSegment, Message
 from nonebot.log import logger
-from botcore.sessions import ensure_current
+from botcore.sessions import ensure_current, SessionInvalidated
 
 # ──────────────────── 配置 ────────────────────
 # 分条发送的阈值：短于此长度的回复直接整条发送
@@ -230,17 +229,19 @@ async def _send_sticker_unlocked(bot, target_id: int, sticker: dict, persona: st
     from . import stickers as library
     gid = str(target_id)
     try:
-        item, content = library.read_image(gid, sticker["id"])
+        from .sticker_transport import image_source
+        item, source = await image_source(bot, gid, sticker["id"], library=library)
         if sticker.get("_automatic") and not library.enabled(gid):
             return None
+    except SessionInvalidated:
+        raise
     except Exception as exc:
         logger.warning(f"发送前表情读取失败: {type(exc).__name__}")
         result = SendResult("failed")
         item = sticker
     else:
         try:
-            response = await bot.send_group_msg(group_id=target_id, message=MessageSegment.image(
-                "base64://" + base64.b64encode(content).decode("ascii")))
+            response = await bot.send_group_msg(group_id=target_id, message=MessageSegment.image(source))
         except Exception as exc:
             result = _delivery_error(exc)
         else:
@@ -255,6 +256,7 @@ async def _send_sticker_unlocked(bot, target_id: int, sticker: dict, persona: st
                 logger.warning(f"表情已发送，保存关联失败: {type(exc).__name__}")
     try:
         from .persona.manager import append_message
+        ensure_current()
         state = {"sent": "已发送", "failed": "发送失败", "unknown": "发送状态未知"}[result.status]
         append_message(gid, {"role": "assistant", "content":
             f"[表情包{state} #{item['id'][:8]}：{'、'.join(item['tags'])}；{item.get('description', '')}]"}, persona)

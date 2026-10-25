@@ -490,12 +490,13 @@ def commands(lib, monkeypatch):
     return mod
 
 
-def test_list_repeats_multitag_images_and_preserves_gif(commands, lib, monkeypatch):
+@pytest.mark.asyncio
+async def test_list_repeats_multitag_images_and_preserves_gif(commands, lib, monkeypatch):
     gif = picture(animated=True)
     lib.add("123", gif, ["猫", "开心"])
     lib.add("123", picture(), ["猫"])
     monkeypatch.setattr(commands, "MAX_BATCH_IMAGES", 1)
-    batches = list(commands.list_batches("123", 99, "Bot"))
+    batches = [batch async for batch in commands.transport_batches(object(), "123", 99, "Bot", entries=lib.items("123"), missing=set())]
     assert len(batches) == 3
     for batch in batches:
         assert len(json.dumps(batch).encode()) < commands.MAX_BATCH_BYTES
@@ -503,15 +504,22 @@ def test_list_repeats_multitag_images_and_preserves_gif(commands, lib, monkeypat
     assert raw_images.count(gif) == 2
 
 
-def test_list_places_large_gif_in_its_own_batch(commands, lib, large_gif):
+@pytest.mark.asyncio
+async def test_list_places_large_gif_in_its_own_batch(commands, lib, large_gif, monkeypatch):
+    from plugins import sticker_transport as transport
     lib.add("123", picture(), ["兔子"])
-    lib.add("123", large_gif, ["兔子"])
+    large, _ = lib.add("123", large_gif, ["兔子"])
     lib.add("123", picture("green"), ["兔子"])
-    batches = list(commands.list_batches("123", 99, "Bot"))
+    async def source(bot, gid, sticker_id, **kwargs):
+        item = lib.get(gid, sticker_id)
+        if sticker_id == large["id"]:
+            return item, "/napcat/fixture.gif"
+        return item, "base64://" + base64.b64encode(lib.read_image(gid, sticker_id)[1]).decode("ascii")
+    monkeypatch.setattr(transport, "image_source", source)
+    batches = [batch async for batch in commands.transport_batches(object(), "123", 99, "Bot", entries=lib.items("123"), missing=set())]
     assert len(batches) == 3 and all(len(batch) == 1 for batch in batches)
-    assert len(json.dumps(batches[1]).encode()) > commands.MAX_BATCH_BYTES
-    encoded = batches[1][0]["data"]["content"][-1]["data"]["file"].split("//", 1)[1]
-    assert base64.b64decode(encoded) == large_gif
+    assert all(len(json.dumps(batch).encode()) < commands.MAX_BATCH_BYTES for batch in batches)
+    assert batches[1][0]["data"]["content"][-1]["data"]["file"] == "/napcat/fixture.gif"
 
 
 @pytest.mark.asyncio
@@ -768,6 +776,50 @@ async def test_deleted_attachment_fails_without_sending_wrong_image(sender, lib)
     assert result.sticker_result.status == "failed"
     bot.send_group_msg.assert_not_awaited()
     assert "发送失败" in records[0][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_large_gif_uploads_bounded_chunks_and_sends_remote_path(sender, lib, monkeypatch):
+    from plugins import sticker_transport as transport
+    mod, bot, event, records, _ = sender
+    raw = picture(animated=True)
+    item, _ = lib.add("123", raw, ["猫"])
+    monkeypatch.setattr(transport, "INLINE_BYTES", 1)
+    monkeypatch.setattr(transport, "CHUNK_BYTES", 17)
+    chunks = []
+    async def api(action, **params):
+        assert action == "upload_file_stream"
+        if params.get("is_complete"):
+            assert b"".join(chunks) == raw
+            return {"status": "file_complete", "file_path": "/napcat/temp/fixture.gif",
+                    "file_size": len(raw), "sha256": lib.content_hash(raw)}
+        chunk = base64.b64decode(params["chunk_data"])
+        assert len(chunk) <= 17
+        assert params["expected_sha256"] == lib.content_hash(raw)
+        assert params["file_retention"] == 300_000
+        chunks.append(chunk)
+        return {"status": "chunk_received", "received_chunks": len(chunks)}
+    bot.call_api.side_effect = api
+    def forbid_full_read(*args):
+        raise AssertionError("large file must not be read into one bytes object")
+    monkeypatch.setattr(lib, "read_image", forbid_full_read)
+    result = await mod.send_chunked(bot, event, [], sticker=item, persona="cat")
+    assert result.sticker_result.status == "sent"
+    assert bot.send_group_msg.await_args.kwargs["message"] == {"image": "/napcat/temp/fixture.gif"}
+    assert len(chunks) > 1
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_chunk_upload_never_sends_image(sender, lib, monkeypatch):
+    from plugins import sticker_transport as transport
+    mod, bot, event, _, _ = sender
+    item, _ = lib.add("123", picture(animated=True), ["猫"])
+    monkeypatch.setattr(transport, "INLINE_BYTES", 1)
+    bot.call_api.return_value = {"status": "unexpected"}
+    result = await mod.send_chunked(bot, event, [], sticker=item, persona="cat")
+    assert result.sticker_result.status == "failed"
+    bot.send_group_msg.assert_not_awaited()
+    assert lib.get("123", item["id"]) is not None
 
 
 @pytest.mark.asyncio

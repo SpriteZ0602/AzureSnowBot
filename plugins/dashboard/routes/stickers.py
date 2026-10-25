@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..auth import get_current_user
@@ -67,10 +68,15 @@ async def list_stickers(gid: str, tag: str = "", page: int = Query(1, ge=1), pag
 async def get_image(gid: str, sticker_id: str):
     _validate(gid)
     try:
-        item, content = library.read_image(gid, sticker_id)
+        item = library.get(gid, sticker_id)
+        if item is None:
+            raise library.StickerError("图片不存在")
+        path = library.image_path(gid, item)
+        if not path.is_file():
+            raise library.StickerError("图片不存在")
     except (library.StickerError, OSError) as exc:
         raise HTTPException(404, "这张表情已经删除或文件不存在") from exc
-    return Response(content=content, media_type=item["mime"], headers={
+    return FileResponse(path, media_type=item["mime"], headers={
         "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
     })
 
