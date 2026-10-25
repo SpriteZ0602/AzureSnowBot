@@ -332,7 +332,7 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
             messages.append({"role": "system", "content": catalog})
 
     # 注入完整工具链（Skill + 本地 + MCP）
-    openai_tools = skill_openai_tools() + local_tools + mcp_openai_tools()
+    openai_tools = skill_openai_tools(chat_type=chat_type) + local_tools + mcp_openai_tools()
 
     try:
         from .llm import call_llm
@@ -384,7 +384,7 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
                     fn_args = {}
 
                 # 分发链路：Skill → 本地工具 → MCP
-                skill_result = skill_handle_tool_call(fn_name, fn_args)
+                skill_result = skill_handle_tool_call(fn_name, fn_args, context=tool_ctx)
                 if skill_result is not None:
                     tool_result = skill_result
                 else:

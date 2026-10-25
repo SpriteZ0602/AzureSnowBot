@@ -264,7 +264,7 @@ async def _execute_scheduled_task(job: ReminderJob) -> str:
 
         system_prompt, tool_ctx = _build_task_system_prompt(job)
         local_tools = local_openai_tools(chat_type=job.chat_type)
-        openai_tools = skill_openai_tools() + local_tools + mcp_openai_tools()
+        openai_tools = skill_openai_tools(chat_type=job.chat_type) + local_tools + mcp_openai_tools()
 
         group_hint = ""
         if job.chat_type == "private" and job.group_id:
@@ -318,7 +318,7 @@ async def _execute_scheduled_task(job: ReminderJob) -> str:
                 except json.JSONDecodeError:
                     fn_args = {}
 
-                skill_result = skill_handle_tool_call(fn_name, fn_args)
+                skill_result = skill_handle_tool_call(fn_name, fn_args, context=tool_ctx)
                 if skill_result is not None:
                     tool_result = skill_result
                 else:

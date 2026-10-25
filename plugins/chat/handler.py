@@ -666,7 +666,7 @@ async def handle_chat(event: PrivateMessageEvent):
     }
 
     # 工具注入（完整工具链：Skill + 本地 + MCP）
-    openai_tools = skill_openai_tools() + local_openai_tools() + mcp_openai_tools()
+    openai_tools = skill_openai_tools(chat_type="private") + local_openai_tools() + mcp_openai_tools()
 
     # 工具调用上下文
     sender_name = getattr(event, "sender", None)
@@ -717,7 +717,7 @@ async def handle_chat(event: PrivateMessageEvent):
                     fn_args = {}
 
                 # 分发链路：Skill → 本地工具 → MCP
-                skill_result = skill_handle_tool_call(fn_name, fn_args)
+                skill_result = skill_handle_tool_call(fn_name, fn_args, context=_tool_context)
                 if skill_result is not None:
                     tool_result = skill_result
                 else:

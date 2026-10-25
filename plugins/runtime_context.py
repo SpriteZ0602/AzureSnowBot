@@ -70,7 +70,7 @@ def _build_tools_summary(chat_type: str = "private") -> str:
     lines: list[str] = []
 
     # Skill 工具
-    skill_lines = skill_summary()
+    skill_lines = skill_summary(chat_type=chat_type)
     if skill_lines:
         lines.append("Skills:")
         lines.extend(skill_lines)

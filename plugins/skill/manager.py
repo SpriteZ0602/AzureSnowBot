@@ -149,19 +149,19 @@ def scan_skills() -> None:
 
 # ──────────────────── Level 1: 元数据查询 ────────────────────
 
-def get_catalog() -> dict[str, SkillMeta]:
+def get_catalog(*, chat_type: str = "private") -> dict[str, SkillMeta]:
     """返回完整的技能目录"""
-    return dict(_catalog)
+    return {name: meta for name, meta in _catalog.items() if not meta.admin_only or chat_type == "private"}
 
 
-def list_skill_names() -> list[str]:
+def list_skill_names(*, chat_type: str = "private") -> list[str]:
     """返回所有已加载的技能名称"""
-    return sorted(_catalog.keys())
+    return sorted(get_catalog(chat_type=chat_type))
 
 
-def get_skill_meta(name: str) -> SkillMeta | None:
+def get_skill_meta(name: str, *, chat_type: str = "private") -> SkillMeta | None:
     """获取指定技能的元数据"""
-    return _catalog.get(name)
+    return get_catalog(chat_type=chat_type).get(name)
 
 
 def build_catalog_prompt(*, chat_type: str = "private") -> str:
@@ -196,12 +196,12 @@ def build_catalog_prompt(*, chat_type: str = "private") -> str:
 
 # ──────────────────── Level 2: 加载 SKILL.md 正文 ────────────────────
 
-def load_skill_body(name: str) -> str | None:
+def load_skill_body(name: str, *, chat_type: str = "private") -> str | None:
     """
     加载指定技能的 SKILL.md 正文（去掉 frontmatter）。
     Level 2 — 只在 LLM 决定触发技能时调用。
     """
-    meta = _catalog.get(name)
+    meta = get_skill_meta(name, chat_type=chat_type)
     if not meta:
         return None
     skill_md = meta.path / "SKILL.md"
@@ -214,12 +214,12 @@ def load_skill_body(name: str) -> str | None:
 
 # ──────────────────── Level 3: 加载参考文件 ────────────────────
 
-def load_skill_reference(name: str, filename: str) -> str | None:
+def load_skill_reference(name: str, filename: str, *, chat_type: str = "private") -> str | None:
     """
     加载指定技能的参考文件内容。
     Level 3 — 只在 LLM 需要深入了解时调用。
     """
-    meta = _catalog.get(name)
+    meta = get_skill_meta(name, chat_type=chat_type)
     if not meta:
         return None
     ref_path = meta.path / "references" / filename
@@ -233,9 +233,9 @@ def load_skill_reference(name: str, filename: str) -> str | None:
     return ref_path.read_text(encoding="utf-8").strip()
 
 
-def list_skill_references(name: str) -> list[str]:
+def list_skill_references(name: str, *, chat_type: str = "private") -> list[str]:
     """列出指定技能的参考文件"""
-    meta = _catalog.get(name)
+    meta = get_skill_meta(name, chat_type=chat_type)
     if not meta:
         return []
     return meta.references
@@ -243,12 +243,13 @@ def list_skill_references(name: str) -> list[str]:
 
 # ──────────────────── OpenAI 工具定义 ────────────────────
 
-def get_openai_tools() -> list[dict]:
+def get_openai_tools(*, chat_type: str = "private") -> list[dict]:
     """
     返回 Skill 系统提供的工具定义（OpenAI function calling 格式）。
     这些工具会和 MCP 工具一起注入到 agentic loop 中。
     """
-    if not _catalog:
+    visible = get_catalog(chat_type=chat_type)
+    if not visible:
         return []
 
     tools = [
@@ -265,7 +266,7 @@ def get_openai_tools() -> list[dict]:
                     "properties": {
                         "name": {
                             "type": "string",
-                            "description": f"技能名称，可选值: {', '.join(sorted(_catalog.keys()))}",
+                            "description": f"技能名称，可选值: {', '.join(list_skill_names(chat_type=chat_type))}",
                         },
                     },
                     "required": ["name"],
@@ -275,11 +276,11 @@ def get_openai_tools() -> list[dict]:
     ]
 
     # 只有存在带 references 的技能时才注册引用加载工具
-    has_refs = any(meta.references for meta in _catalog.values())
+    has_refs = any(meta.references for meta in visible.values())
     if has_refs:
         # 构建所有可用引用的描述
         ref_examples = []
-        for sname, meta in sorted(_catalog.items()):
+        for sname, meta in sorted(visible.items()):
             for ref in meta.references:
                 ref_examples.append(f"{sname}/{ref}")
 
@@ -313,18 +314,19 @@ def get_openai_tools() -> list[dict]:
 
 # ──────────────────── 工具调用分发 ────────────────────
 
-def handle_tool_call(tool_name: str, arguments: dict) -> str | None:
+def handle_tool_call(tool_name: str, arguments: dict, *, context: dict | None = None) -> str | None:
     """
     处理 Skill 系统的工具调用。
     返回结果文本，如果 tool_name 不属于 Skill 系统则返回 None。
     """
+    chat_type = (context or {}).get("_chat_type", "")
     if tool_name == "skill__load_skill":
         name = arguments.get("name", "")
-        body = load_skill_body(name)
+        body = load_skill_body(name, chat_type=chat_type)
         if body is None:
-            return f"[错误] 技能 '{name}' 不存在。可用技能: {', '.join(sorted(_catalog.keys()))}"
+            return f"[错误] 技能 '{name}' 不存在。可用技能: {', '.join(list_skill_names(chat_type=chat_type))}"
         # 附加 references 信息
-        refs = list_skill_references(name)
+        refs = list_skill_references(name, chat_type=chat_type)
         if refs:
             body += f"\n\n---\n📎 此技能附带参考文档: {', '.join(refs)}\n可通过 load_reference 工具加载。"
         return body
@@ -332,9 +334,9 @@ def handle_tool_call(tool_name: str, arguments: dict) -> str | None:
     if tool_name == "skill__load_reference":
         skill_name = arguments.get("skill_name", "")
         filename = arguments.get("filename", "")
-        content = load_skill_reference(skill_name, filename)
+        content = load_skill_reference(skill_name, filename, chat_type=chat_type)
         if content is None:
-            refs = list_skill_references(skill_name)
+            refs = list_skill_references(skill_name, chat_type=chat_type)
             if refs:
                 return f"[错误] 参考文件 '{filename}' 不存在。可用文件: {', '.join(refs)}"
             return f"[错误] 技能 '{skill_name}' 不存在或没有参考文件。"
@@ -345,10 +347,10 @@ def handle_tool_call(tool_name: str, arguments: dict) -> str | None:
 
 # ──────────────────── 摘要（供 /help 等使用） ────────────────────
 
-def list_skills_summary() -> list[str]:
+def list_skills_summary(*, chat_type: str = "private") -> list[str]:
     """返回所有技能的摘要列表"""
     lines = []
-    for name, meta in sorted(_catalog.items()):
+    for name, meta in sorted(get_catalog(chat_type=chat_type).items()):
         desc = meta.description[:60]
         ref_count = len(meta.references)
         ref_info = f" [{ref_count} refs]" if ref_count else ""

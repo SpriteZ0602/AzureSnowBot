@@ -86,6 +86,16 @@ class TestRegisterTool:
         assert tool.parameters["properties"] == {}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context", [None, {}, {"_chat_type": "group"}])
+async def test_admin_tool_cannot_be_called_from_untrusted_context(context):
+    execute = AsyncMock(return_value="secret")
+    register_tool(name="restricted_probe", description="test", admin_only=True)(execute)
+    result = await handle_tool_call("local__restricted_probe", {"_context": {"_chat_type": "private"}}, context=context)
+    assert "错误" in result
+    execute.assert_not_called()
+
+
 # ──────────────────── get_openai_tools（admin_only 过滤） ────────────────────
 
 class TestGetOpenaiTools:

@@ -29,7 +29,7 @@ async def handle_skill(event: GroupMessageEvent):
 
     # /skill (无参数) — 列出所有
     if not arg:
-        names = sm.list_skill_names()
+        names = sm.list_skill_names(chat_type="group")
         if not names:
             await skill_cmd.finish(
                 MessageSegment.reply(event.message_id)
@@ -37,7 +37,7 @@ async def handle_skill(event: GroupMessageEvent):
             )
         lines = ["📚 已加载技能：\n"]
         for name in names:
-            meta = sm.get_skill_meta(name)
+            meta = sm.get_skill_meta(name, chat_type="group")
             if meta:
                 desc = meta.description[:80]
                 ref_info = f" [{len(meta.references)} 参考文档]" if meta.references else ""
@@ -50,14 +50,14 @@ async def handle_skill(event: GroupMessageEvent):
     # /skill reload — 重新扫描
     if arg == "reload":
         sm.scan_skills()
-        names = sm.list_skill_names()
+        names = sm.list_skill_names(chat_type="group")
         await skill_cmd.finish(
             MessageSegment.reply(event.message_id)
             + f"已重新扫描技能目录，共加载 {len(names)} 个技能。"
         )
 
     # /skill <name> — 查看详情
-    meta = sm.get_skill_meta(arg)
+    meta = sm.get_skill_meta(arg, chat_type="group")
     if not meta:
         await skill_cmd.finish(
             MessageSegment.reply(event.message_id)
@@ -73,7 +73,7 @@ async def handle_skill(event: GroupMessageEvent):
         lines.append(f"参考文档: {', '.join(meta.references)}")
 
     # 显示 SKILL.md 正文摘要（前 500 字）
-    body = sm.load_skill_body(meta.name)
+    body = sm.load_skill_body(meta.name, chat_type="group")
     if body:
         preview = body[:500]
         if len(body) > 500:

@@ -142,13 +142,15 @@ async def handle_tool_call(
     if not tool:
         return f"[错误] 本地工具 '{tool_name}' 不存在"
 
-    if (context or {}).get("_chat_type", "private") not in tool.chat_types:
+    chat_type = (context or {}).get("_chat_type", "")
+    if tool.admin_only and chat_type != "private":
+        return "[错误] 此工具仅限 Admin 私聊使用"
+    if context and chat_type not in tool.chat_types:
         return "[错误] 此工具不能在当前会话使用"
 
     try:
         call_args = {**arguments}
-        if context:
-            call_args["_context"] = context
+        call_args["_context"] = context
         result = tool.execute(**call_args)
         # 支持同步和异步函数
         if inspect.isawaitable(result):

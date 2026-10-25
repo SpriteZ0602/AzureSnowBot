@@ -353,6 +353,20 @@ body""", encoding="utf-8")
 
 class TestToolCallDispatch:
 
+    def test_admin_skill_requires_private_context(self, skill_env):
+        sm, skills_dir = skill_env
+        directory = skills_dir / "secret"
+        directory.mkdir()
+        (directory / "SKILL.md").write_text("private-body", encoding="utf-8")
+        sm._catalog["secret"] = sm.SkillMeta("secret", "secret-description", directory, admin_only=True)
+        assert "secret" not in str(sm.get_openai_tools(chat_type="group"))
+        assert sm.list_skill_names(chat_type="group") == []
+        assert sm.get_skill_meta("secret", chat_type="group") is None
+        assert sm.load_skill_body("secret", chat_type="group") is None
+        for context in (None, {}, {"_chat_type": "group"}):
+            assert "private-body" not in sm.handle_tool_call("skill__load_skill", {"name": "secret"}, context=context)
+        assert sm.handle_tool_call("skill__load_skill", {"name": "secret"}, context={"_chat_type": "private"}) == "private-body"
+
     def test_load_skill_dispatch(self, skill_env):
         sm, skills_dir = skill_env
         skill_dir = skills_dir / "demo"

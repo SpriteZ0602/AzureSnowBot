@@ -233,7 +233,7 @@ async def _handle_group_chat(
     }
 
     # 合并 MCP 工具 + Skill 工具 + 本地工具（群聊过滤 admin_only 工具）
-    openai_tools = get_openai_tools() + skill_openai_tools() + local_openai_tools(chat_type="group")
+    openai_tools = get_openai_tools() + skill_openai_tools(chat_type="group") + local_openai_tools(chat_type="group")
     sticker_results: list[str] = []
 
     def sticker_result_reply() -> str:
@@ -308,7 +308,7 @@ async def _handle_group_chat(
                     fn_args = {}
 
                 # 分发链路：Skill → 本地工具 → MCP
-                skill_result = skill_handle_tool_call(fn_name, fn_args)
+                skill_result = skill_handle_tool_call(fn_name, fn_args, context=_tool_context)
                 if skill_result is not None:
                     tool_result = skill_result
                 else:
