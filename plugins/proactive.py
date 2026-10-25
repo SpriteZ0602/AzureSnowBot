@@ -28,20 +28,6 @@ from nonebot.log import logger
 
 from .chunker import send_chunked_raw
 from .llm import API_KEY
-from .local_tools.manager import (
-    get_openai_tools as local_openai_tools,
-    handle_tool_call as local_handle_tool_call,
-)
-from .mcp.manager import (
-    get_openai_tools as mcp_openai_tools,
-    call_tool as mcp_call_tool,
-    MAX_TOOL_ROUNDS,
-)
-from .skill.manager import (
-    get_openai_tools as skill_openai_tools,
-    handle_tool_call as skill_handle_tool_call,
-    build_catalog_prompt as skill_catalog_prompt,
-)
 
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
@@ -244,6 +230,23 @@ async def run_heartbeat(chat_type: str, target_id: str) -> None:
     """
     if not ADMIN_NUMBER or not API_KEY:
         return
+
+    # 加载 manager 也会执行所属包的 __init__，从而注册命令并导入群 handler。
+    # 必须等心跳实际执行时再加载工具链，保证计时器 API 已完成初始化。
+    from .local_tools.manager import (
+        get_openai_tools as local_openai_tools,
+        handle_tool_call as local_handle_tool_call,
+    )
+    from .mcp.manager import (
+        get_openai_tools as mcp_openai_tools,
+        call_tool as mcp_call_tool,
+        MAX_TOOL_ROUNDS,
+    )
+    from .skill.manager import (
+        get_openai_tools as skill_openai_tools,
+        handle_tool_call as skill_handle_tool_call,
+        build_catalog_prompt as skill_catalog_prompt,
+    )
 
     # ── 会话级上下文加载（延迟导入避免循环引用）──
     if chat_type == "private":

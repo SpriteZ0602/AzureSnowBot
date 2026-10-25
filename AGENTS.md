@@ -1,7 +1,7 @@
 # AGENTS.md — AzureSnowBot 开发指南
 
 > 本文件供 AI 编码工具（Copilot / Claude / Cursor 等）在新会话中快速理解项目。
-> 最后更新: 2026-10-22
+> 最后更新: 2026-10-25
 
 ---
 
@@ -30,6 +30,8 @@
 
 ### 插件加载方式
 `pyproject.toml` 配置 `plugin_dirs = ["plugins"]`，NoneBot2 会递归扫描 `plugins/` 下所有包。每个子包的 `__init__.py` 负责导入自己的子模块（handler、commands 等）。
+
+注意插件加载顺序不固定，`from .skill.manager import ...` 也会执行 `skill/__init__.py` 并间接导入群 handler。`proactive.py` 的工具链依赖必须在 `run_heartbeat()` 内延迟导入，不能在计时器 API 定义前加载，否则会形成 `proactive → skill.commands → group.handler → proactive` 循环，且失败后重试可能重复注册启动钩子。`tests/test_plugin_startup.py` 在临时源码副本、独立进程中使用真实 NoneBot 验证六种加载顺序及启动钩子唯一性；不能仅靠隔离 mock 单元测试验证此类问题。
 
 ### LLM 调用
 `plugins/llm.py` 是唯一的 LLM 配置中心，导出 `API_KEY, BASE_URL, MODEL`。所有调用方 `from ..llm import ...`，**不要**在其他模块硬编码 API key 或 base URL。
