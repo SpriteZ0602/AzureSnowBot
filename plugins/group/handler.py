@@ -118,6 +118,8 @@ async def _handle_group_chat(
                                               self_id=str(event.self_id), reply=event.reply,
                                               refresh=refresh_images)
         quoted_author, quoted_text = quoted.author, quoted.text
+        if is_legacy_score_binding(quoted_text):
+            quoted_text = "[已隐藏旧查分凭证]"
         quoted_images = quoted.images
     else:
         from ..message_parser import MessageResolver, segments

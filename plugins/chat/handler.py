@@ -463,6 +463,7 @@ PRIVATE_HELP = """Admin 私聊指令：
 /chatter <群号> [on|off] — 开关指定群的复读与插话（不带群号查看各群状态）
 /自动表情 <群号> on|off — 开关该群自动配图；关闭后仍可明确索图
 /白名单 list|add <群号>|delete <群号> — 管理群白名单
+/mai、/chu — 国服音游查分与查歌，发送 /mai 帮助 或 /chu 帮助
 /help — 显示本帮助
 
 群聊专用：/表情列表 — 在群里发送，无需 @Bot，按标签分批展示该群全部表情。
@@ -562,6 +563,8 @@ async def _handle_chat(event: PrivateMessageEvent):
     last = _load_config(user_id).get("last_message_at", "")
 
     # 记录用户消息（带引用内容，纯文本）
+    if is_legacy_score_binding(quoted_text):
+        quoted_text = "[已隐藏旧查分凭证]"
     if quoted_text:
         content = f'(引用了一条消息: "{quoted_text}"): {user_input}'
     else:

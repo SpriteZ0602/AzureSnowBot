@@ -8,3 +8,4 @@ from .local_tools import manager as manager  # noqa: F401
 from .local_tools import tools as tools      # noqa: F401  触发工具注册
 from .local_tools import tarot as tarot      # noqa: F401  触发工具注册
 from .local_tools import stickers as stickers  # noqa: F401
+from .otoge import tools as otoge_tools  # noqa: F401

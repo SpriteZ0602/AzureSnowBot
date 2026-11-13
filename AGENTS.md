@@ -459,6 +459,13 @@ class SessionStore:
 - **`group_mute`**：禁言群成员。硬护栏写死在工具实现里（模型侧判断不可靠）：调用者须本群管理员（`_user_id` 查 role）、目标非群主/管理员/Bot 自己、单次时长封顶 `_MUTE_MAX_MINUTES = 10` 分钟；`set_group_ban` 失败 try/except 返回 `[错误]` 文本
 - 设计取舍：昵称→QQ号解析由模型在 Loop 里完成（成员列表作为独立工具），不封进 mute 工具内部；超 200 人列表截断展示
 
+### 10. 国服音游查分
+
+- `plugins/otoge/prober.py` 查询舞萌 DX 和中二节奏的公开成绩、国服曲库及落雪/柚子别名。水鱼按 QQ 或用户名，落雪通过开发者令牌按 QQ 查好友码与最佳成绩，尊重来源方隐私设置。玩家成绩不做跨请求缓存，公开曲库和别名在内存按来源缓存 24 小时，刷新失败继续用旧数据。
+- `plugins/otoge_plugin.py` 注册 `/mai`、`/chu` 及别名，限白名单群和 Admin 私聊；优先用 `plugins/otoge/render.py` 出图，无 CJK 字体时回退文字。`plugins/otoge/tools.py` 提供自然语言入口 `otoge_best_scores` / `otoge_song_search`，模型只接收文字结果。
+- `.env` 的 `OTOGE_LXNS_TOKEN` 仅用于落雪开发者 API，`OTOGE_FONT_PATH` 可指定本机字体。旧舞萌 Token 文件不再读取，保留 gitignore，误发的旧绑定指令跳过群记录和主对话。
+- 接入参考 `KingClup/astrbot_plugin_otoge_prober` 的国服数据源与别名合并，运行时仅用现有的 httpx、Pillow 和 NoneBot。
+
 ## 代码风格约定
 
 - 使用 `from nonebot.log import logger` 做日志，不用 `print`

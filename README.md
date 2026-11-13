@@ -126,6 +126,8 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 | `get_group_chat_log` | 检索群聊历史消息（按昵称/QQ号/关键词/时间筛选） |
 | `get_group_members` | 获取群成员列表（QQ号/昵称/群名片/角色），供模型把外号、昵称解析到 QQ号 |
 | `group_mute` | 禁言群成员（硬护栏：调用者须本群管理员、目标非群主/管理员/Bot、时长封顶 10 分钟） |
+| `otoge_best_scores` | 查舞萌 DX、中二节奏国服公开成绩（水鱼或落雪） |
+| `otoge_song_search` | 按曲名、别名或 ID 查询国服曲目和谱面定数 |
 | `memory_search` | 语义搜索长期记忆和历史对话（Embedding + BM25 混合搜索）<br>※ 需 provider 支持 `/embeddings`；未配置时返回空且不报错。日常记忆靠 MEMORY.md 注入 system prompt，不依赖此工具 |
 | `run_sub_agent` | 启动独立 Sub-Agent 执行任务（隔离上下文，带工具链） |
 | `run_command` | 执行本地 shell 命令（仅 Admin 私聊，超时 30s） |
@@ -134,6 +136,24 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 添加新工具只需在 `plugins/local_tools/tools.py` 中编写函数并加上 `@register_tool` 装饰器，重启即可。
 
 工具调用优先级：Skill 工具 → 本地工具 → MCP 工具。
+
+### 国服音游查分
+
+白名单群无需 @Bot，Admin 私聊也可用。支持舞萌 DX `/mai` 和中二节奏 `/chu`：
+
+| 指令 | 用途 |
+|---|---|
+| `/mai b50` | 查自己在水鱼的公开成绩，优先发成绩图 |
+| `/chu b50 落雪 @玩家` | 查指定玩家在落雪的公开成绩，已在落雪绑 QQ 才能查 |
+| `/mai b50 水鱼 用户名 <水鱼用户名> 文字` | 按水鱼用户名查成绩，发文字版 |
+| `/mai 查歌 鸟屎` | 按曲名、别名或 ID 查曲和定数 |
+| `/mai 帮助` 或 `/chu 帮助` | 查看完整用法 |
+
+也可 @Bot 说“查一下我的舞萌 B50”或“中二的反叛是什么歌”。水鱼开箱可用，落雪查分需在 `.env` 配置 `OTOGE_LXNS_TOKEN`（落雪开发者令牌）并重启，曲库搜索无需令牌。成绩需由玩家先同步并对第三方开放。图片使用系统已有的中日韩字体，找不到时发送文字。Linux 可安装 `fonts-noto-cjk`，也可以设置 `.env` 的 `OTOGE_FONT_PATH` 指向已安装的字体文件。
+
+旧 `/bind`、`/unbind` 已停用。若服务器有 `data/maimai/tokens.json`，管理员可在确认无需旧凭证后删除该文件。曾在群里发送过导入 Token 的玩家可到水鱼个人资料页轮换凭证。
+
+查询与别名合并参考 [KingClup 的 Otoge Prober](https://github.com/KingClup/astrbot_plugin_otoge_prober)。数据来自[水鱼](https://maimai.diving-fish.com/)、[落雪](https://maimai.lxns.net/)和[柚子别名库](https://www.yuzuchan.moe/)。
 
 ### 定时提醒与定时任务
 

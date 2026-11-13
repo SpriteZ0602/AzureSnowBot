@@ -194,7 +194,8 @@ def group_handler(tmp_path, monkeypatch):
     module("plugins.group.chatter", note_bot_reply=lambda gid: None)
     module("plugins.group.utils", in_whitelist=lambda gid: True, is_at_bot=lambda e: True,
            extract_text=AsyncMock(), is_group_event=lambda e: True,
-           get_reply_id=lambda e: e.reply_id, trim_history=lambda h, p: h, get_session_lock=MagicMock())
+           get_reply_id=lambda e: e.reply_id, trim_history=lambda h, p: h, get_session_lock=MagicMock(),
+           is_legacy_score_binding=lambda text: False)
     name = "plugins.group.handler_image_test"
     spec = importlib.util.spec_from_file_location(name, ROOT / "plugins/group/handler.py")
     handler = importlib.util.module_from_spec(spec)
