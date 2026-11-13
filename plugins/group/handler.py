@@ -48,7 +48,7 @@ from ..llm import (
 from ..proactive import reset_idle_timer as reset_group_proactive_timer
 from .utils import (
     in_whitelist, is_at_bot, extract_text, is_group_event,
-    get_reply_id, trim_history,
+    get_reply_id, trim_history, is_legacy_score_binding,
     get_session_lock,
 )
 
@@ -71,6 +71,9 @@ async def handle_group_chat(event: GroupMessageEvent):
     # 忽略 Bot 自己发出的消息（全量模式下避免自我触发循环）
     if event.user_id == event.self_id:
         return
+
+    if is_legacy_score_binding(event.get_plaintext()):
+        await group_chat.finish("旧查分绑定指令已停用，请勿在聊天中发送成绩凭证。")
 
     bot = get_bot()
     user_input = await extract_text(bot, event)

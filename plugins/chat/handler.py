@@ -36,7 +36,7 @@ from ..skill.manager import (
 )
 from ..proactive import reset_idle_timer, cancel_idle_timer
 from .compaction import compact_history, should_compact
-from ..group.utils import fetch_quoted_image_urls
+from ..group.utils import fetch_quoted_image_urls, is_legacy_score_binding
 from ..history_io import append_jsonl_message, clear_jsonl_history, load_jsonl_history
 
 # ──────────────────── 配置 ────────────────────
@@ -345,49 +345,6 @@ chatter_cmd_private = on_message(
 )
 
 
-bind_cmd_private = on_message(
-    rule=Rule(is_private_event) & startswith("/bind"),
-    priority=10, block=True,
-)
-
-
-@bind_cmd_private.handle()
-async def handle_bind_private(event: PrivateMessageEvent):
-    text = event.get_plaintext().strip()
-    if not text.startswith("/bind"):
-        return
-
-    from ..maimai import bind_token, verify_token
-
-    token = text[len("/bind"):].strip()
-    if not token:
-        await bind_cmd_private.finish(
-            "用法: /bind <水鱼导入Token>\n"
-            "Token 在 maimai.diving-fish.com 登录后「个人资料」页获取。"
-            "绑定后查询你自己的成绩可看完整 b50（不受隐私遮蔽影响）。"
-        )
-
-    info = await verify_token(token)
-    if info is None:
-        await bind_cmd_private.finish("[错误] Token 无效或已过期，请去水鱼个人资料页重新获取。")
-
-    bind_token(str(event.user_id), token)
-    await bind_cmd_private.finish(
-        f"已绑定到水鱼账号「{info.get('username')}」（rating={info.get('rating')}）。"
-    )
-
-
-unbind_cmd_private = on_fullmatch("/unbind", rule=Rule(is_private_event), priority=10, block=True)
-
-
-@unbind_cmd_private.handle()
-async def handle_unbind_private(event: PrivateMessageEvent):
-    from ..maimai import unbind_token
-
-    ok = unbind_token(str(event.user_id))
-    await unbind_cmd_private.finish("已解除绑定。" if ok else "你还没有绑定过 Token。")
-
-
 @chatter_cmd_private.handle()
 async def handle_chatter_private(event: PrivateMessageEvent):
     user_id = str(event.user_id)
@@ -505,8 +462,6 @@ PRIVATE_HELP = """Admin 私聊指令：
 /listen <群号> [on|off] — 切换指定群的全量上下文模式
 /chatter <群号> [on|off] — 开关指定群的复读与插话（不带群号查看各群状态）
 /自动表情 <群号> on|off — 开关该群自动配图；关闭后仍可明确索图
-/bind <token> — 绑定水鱼查分 Token（查询自己成绩不被隐私遮蔽）
-/unbind — 解除水鱼 Token 绑定
 /白名单 list|add <群号>|delete <群号> — 管理群白名单
 /help — 显示本帮助
 
@@ -559,6 +514,9 @@ async def _handle_chat(event: PrivateMessageEvent):
     user_input = event.get_plaintext().strip()
     if not user_input:
         return
+
+    if is_legacy_score_binding(user_input):
+        await chat.finish("旧查分绑定指令已停用，请勿在聊天中发送成绩凭证。")
 
     if not OPENAI_API_KEY:
         await chat.finish("未配置 OpenAI API Key，请联系管理员。")

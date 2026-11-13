@@ -126,8 +126,6 @@ Admin 私聊拥有与群聊一致的完整工具链（Skill + 本地工具 + MCP
 | `get_group_chat_log` | 检索群聊历史消息（按昵称/QQ号/关键词/时间筛选） |
 | `get_group_members` | 获取群成员列表（QQ号/昵称/群名片/角色），供模型把外号、昵称解析到 QQ号 |
 | `group_mute` | 禁言群成员（硬护栏：调用者须本群管理员、目标非群主/管理员/Bot、时长封顶 10 分钟） |
-| `maimai_player_query` | 查舞萌DX玩家 b50 成绩与 DX Rating（水鱼查分器；对方 /bind 绑定 Token 后走本人通道看完整成绩） |
-| `maimai_song_search` | 按别名/俗称/曲名模糊搜索舞萌DX曲目（柚子别名库，如"鸟屎"→Hurtling Boys） |
 | `memory_search` | 语义搜索长期记忆和历史对话（Embedding + BM25 混合搜索）<br>※ 需 provider 支持 `/embeddings`；未配置时返回空且不报错。日常记忆靠 MEMORY.md 注入 system prompt，不依赖此工具 |
 | `run_sub_agent` | 启动独立 Sub-Agent 执行任务（隔离上下文，带工具链） |
 | `run_command` | 执行本地 shell 命令（仅 Admin 私聊，超时 30s） |

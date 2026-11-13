@@ -17,7 +17,7 @@ from .chatlog_db import (
     purge_all_old_entries,
     purge_old_entries,
 )
-from .utils import extract_text, is_group_event, in_whitelist, is_at_bot
+from .utils import extract_text, is_group_event, in_whitelist, is_at_bot, is_legacy_score_binding
 from ..persona.manager import get_listen_all
 
 __all__ = ["append_chatlog", "load_chatlog", "purge_old_entries", "RETENTION_DAYS"]
@@ -48,18 +48,12 @@ async def _record_group_message(bot: Bot, event: GroupMessageEvent):
     if not in_whitelist(event.group_id):
         return
 
-    # 凭证指令先检查原文，避免解析附件时把 Token 相关内容持久化。
-    plaintext = event.get_plaintext().strip()
-    if plaintext.startswith(("/bind", "/unbind")):
+    if is_legacy_score_binding(event.get_plaintext()):
         return
 
     # 通用提取保留 @、图片占位和合并转发内容。
     text = await extract_text(bot, event)
     if not text:
-        return
-
-    # /bind 消息携带水鱼 Token（成绩数据凭证），不落任何记录（全量记录与 listen_all 上下文都跳过）
-    if text.startswith("/bind") or text.startswith("/unbind"):
         return
 
     group_id = str(event.group_id)

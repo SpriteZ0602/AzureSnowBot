@@ -22,6 +22,12 @@ def is_group_event(event) -> bool:
     """
     return isinstance(event, GroupMessageEvent)
 
+
+def is_legacy_score_binding(text: str) -> bool:
+    """旧绑定指令可能仍被误发，避免把随附凭证交给模型或存入历史。"""
+    command = text.strip().lower().split(maxsplit=1)
+    return bool(command and command[0] in ("/bind", "/unbind"))
+
 # ──────────────────── 配置 ────────────────────
 config = get_driver().config
 
